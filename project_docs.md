@@ -27,3 +27,20 @@ A **LatentDB** object that lives alongside any policy or network.
 2. **Analyze:** Automated jobs mine correlations, mutual-info, clustering, etc.
 3. **Explain:** An LLM spins those raw numbers into clear prose—flagging anomalies, trends, co-activations
 4. **Interact:** Chat with your model (“What latents drove that decision?”), compare two channels side-by-side, or generate periodic “health reports.”
+
+### Pipeline: 
+get data -> feed and collect activations -> train transcoders while getting metadata (e.g. game stats) -> store into db -> generate descriptions of latents -> generate descriptions of how model is behaving
+
+# TO DO:
+Finish StorageBackend with the three tables above.
+
+Collector (wrapper + TorchHook).
+
+Stat job that fills StatBlocks.
+
+Describe-latents queue (simple for now: run in-process).
+
+TranscoderPipeline wired to DB.
+
+BehaviourExplainer for per-step Q&A.
+
