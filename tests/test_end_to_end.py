@@ -58,4 +58,15 @@ def test_cartpole_integration(tmp_path):
     with pytest.raises(KeyError):
         db.describe(layer="0", channel=0)
 
+    # ------------------------------------------------------------------
+    # 4. correlation ---------------------------------------------------
+    # ------------------------------------------------------------------
+    statblocks = list(db.iter_statblocks())
+    sb = statblocks[0]
+    assert sb.top_correlations, "metric correlation missing"
+    label, rho = sb.top_correlations[0]
+    assert label == "metric"
+    assert -1.0 <= rho <= 1.0
+
     db.close()
+

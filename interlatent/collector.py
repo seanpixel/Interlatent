@@ -11,7 +11,7 @@ from __future__ import annotations
 import time
 import uuid
 from contextlib import nullcontext
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence, Any
 
 import numpy as np
 import torch
@@ -19,6 +19,7 @@ import torch
 from .schema import ActivationEvent, RunInfo
 from .api.latent_db import LatentDB
 from .utils.logging import get_logger
+from .metrics import Metric
 
 try:  # TorchHook will be implemented in hooks.py; we import lazily.
     from .hooks import TorchHook  # type: ignore
@@ -37,11 +38,13 @@ class Collector:
         self,
         db: LatentDB,
         *,
+        metric_fns: list[Metric] | None = None,
         hook_layers: Sequence[str] | None = None,
         batch_size: int = 1,
         device: str | torch.device = "cuda" if torch.cuda.is_available() else "cpu",
     ) -> None:
         self.db = db
+        self.metrics = {m.name: m for m in (metric_fns or [])}
         self.hook_layers = hook_layers or []  # empty → no activations captured
         self.batch_size = batch_size
         self.device = device
@@ -93,10 +96,11 @@ class Collector:
 
             # You can extend this branch for Box / MultiDiscrete later
             raise NotImplementedError("Collector demo-policy only supports discrete actions.")
-
+        
+        step_ctx: Dict[str, Any] = {}
         # Use TorchHook if available; else run without hooks.
         hook_ctx = (
-            TorchHook(model, layers=self.hook_layers, db=self.db, run_id=run_id)  # type: ignore
+            TorchHook(model, layers=self.hook_layers, db=self.db, run_id=run_id, context_supplier=lambda: step_ctx,)  # type: ignore
             if TorchHook and self.hook_layers
             else nullcontext()
         )
@@ -111,25 +115,19 @@ class Collector:
                 score += float(reward)
                 episode_len += 1
 
-                # Context snapshot to attach to activation events (TorchHook handles actual insert).
-                ctx = {
-                    "reward": float(reward),
-                    "score": score,
-                    **(info or {}),
-                }
-                # Store minimal step-level context even if no hooks
-                if not self.hook_layers:
-                    ev = ActivationEvent(
-                        run_id=run_id,
-                        step=step,
-                        layer="_none",
-                        channel=0,
-                        values=[0.0],
-                        context=ctx,
-                    )
-                    self.db.write_event(ev)
+                metric_vals = {}
+                for m in self.metrics.values():
+                    val = m.step(obs=obs, reward=reward, info=info)
+                    if val is not None:
+                        metric_vals[m.name] = float(val)
+
+                step_ctx.clear()
+                if metric_vals:
+                    step_ctx["metrics"] = metric_vals
 
                 if done:
+                    for m in self.metrics.values():
+                        m.reset()
                     obs = env.reset()
                     _LOG.debug("Episode done at step %d (len=%d, score=%f)", step, episode_len, score)
                     episode_len, score = 0, 0.0

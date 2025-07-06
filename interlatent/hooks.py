@@ -19,7 +19,7 @@ from __future__ import annotations
 import itertools
 import weakref
 from contextlib import AbstractContextManager
-from typing import Dict, List, Sequence
+from typing import Dict, List, Sequence, Callable, Any, Optional
 
 import torch
 
@@ -39,6 +39,7 @@ class TorchHook(AbstractContextManager):
         self,
         model: torch.nn.Module,
         *,
+        context_supplier: Optional[Callable[[], Dict[str, Any]]] = None,
         layers: Sequence[str],
         db: LatentDB,
         run_id: str,
@@ -49,6 +50,7 @@ class TorchHook(AbstractContextManager):
         self.db = db
         self.run_id = run_id
         self.max_channels = max_channels
+        self._ctx_fn = context_supplier or (lambda: {})
 
         self._handles: List[torch.utils.hooks.RemovableHandle] = []
         self._step_counter = itertools.count().__next__  # atomic-ish counter
@@ -110,14 +112,17 @@ class TorchHook(AbstractContextManager):
             for b in range(B):
                 step = step_counter()
                 for ch in range(C):
-                    values = tensor[b, ch].float().view(-1).tolist()
+                    vals = tensor[b, ch].float().view(-1)
+                    ctx = dict(self._ctx_fn())
                     ev = ActivationEvent(
                         run_id=run_id,
                         step=step,
                         layer=layer_name,
                         channel=ch,
-                        tensor=values,
-                        context={},  # Collector may attach env info separately
+                        tensor=vals.tolist(),
+                        value_sum=float(vals.sum()),
+                        value_sq_sum=float((vals**2).sum()),
+                        context=ctx,  
                     )
                     db.write_event(ev)
 

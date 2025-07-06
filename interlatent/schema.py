@@ -64,6 +64,9 @@ class ActivationEvent(BaseModel):
     layer: str = Field(...)
     channel: int = Field(..., ge=0)
 
+    value_sum: float | None = None
+    value_sq_sum: float | None = None
+
     tensor: List[float] = Field(..., description="Flattened float32 tensor.")
     timestamp: str = Field(default_factory=_now, description="Wall‑clock capture time (UTC ISO).")
     context: Dict[str, Any] = Field(default_factory=dict, description="Instantaneous env info (score, x_pos, etc.)")

@@ -82,20 +82,45 @@ class SQLiteBackend(StorageBackend):
             ) WITHOUT ROWID;
             """
         )
+        # metric sums
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS metric_sums (
+            metric      TEXT,
+            layer       TEXT,
+            channel     INTEGER,
+            count       INTEGER DEFAULT 0,
+            sum_m       REAL    DEFAULT 0,
+            sum_m2      REAL    DEFAULT 0,
+            sum_xm      REAL    DEFAULT 0,
+            PRIMARY KEY (metric, layer, channel)
+            ) WITHOUT ROWID;
+            """
+        )
         # stats table
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS stats (
-              layer        TEXT,
-              channel      INTEGER,
-              count        INTEGER,
-              mean         REAL,
-              std          REAL,
-              min          REAL,
-              max          REAL,
-              correlations TEXT,      
-              last_updated TEXT,
-              PRIMARY KEY (layer, channel)
+            layer        TEXT,
+            channel      INTEGER,
+
+            -- running tallies ----------
+            count        INTEGER      DEFAULT 0,
+            sum_x        REAL         DEFAULT 0,   -- Σ x
+            sum_x2       REAL         DEFAULT 0,   -- Σ x²
+            sum_m        REAL         DEFAULT 0,   -- Σ m
+            sum_m2       REAL         DEFAULT 0,   -- Σ m²
+            sum_xm       REAL         DEFAULT 0,   -- Σ x m
+
+            -- derived moments ----------
+            mean         REAL,
+            std          REAL,
+            min          REAL,
+            max          REAL,
+
+            correlations TEXT,
+            last_updated TEXT,
+            PRIMARY KEY (layer, channel)
             ) WITHOUT ROWID;
             """
         )
@@ -157,7 +182,43 @@ class SQLiteBackend(StorageBackend):
     # ------------------------------------------------------------------
 
     def write_event(self, ev: ActivationEvent) -> None:
+        
         cur = self._conn.cursor()
+        metrics: dict[str, float] = ev.context.get("metrics", {})
+        if metrics:                       # skip fast path if none
+            sum_x  = ev.value_sum or sum(ev.tensor)
+            sum_x2 = ev.value_sq_sum or sum(v*v for v in ev.tensor)
+            for name, m in metrics.items():
+                m = float(m)
+                cur.execute(
+                    """
+                    INSERT INTO metric_sums (metric, layer, channel,
+                                            count, sum_m, sum_m2, sum_xm)
+                    VALUES (?, ?, ?, 1, ?, ?, ?)
+                    ON CONFLICT(metric, layer, channel) DO UPDATE SET
+                    count  = count  + 1,
+                    sum_m  = sum_m  + EXCLUDED.sum_m,
+                    sum_m2 = sum_m2 + EXCLUDED.sum_m2,
+                    sum_xm = sum_xm + EXCLUDED.sum_xm
+                    """,
+                    (
+                        name, ev.layer, ev.channel,
+                        m,            # Σ m
+                        m * m,        # Σ m²
+                        sum_x * m,    # Σ x m
+                    ),
+                )
+                cur.execute(
+                    """
+                    INSERT INTO stats (layer, channel, count, sum_x, sum_x2)
+                    VALUES (?, ?, 1, ?, ?)
+                    ON CONFLICT(layer, channel) DO UPDATE SET
+                    count  = count  + 1,
+                    sum_x  = sum_x  + EXCLUDED.sum_x,
+                    sum_x2 = sum_x2 + EXCLUDED.sum_x2
+                    """,
+                    (ev.layer, ev.channel, sum_x, sum_x2),
+                )                        
         cur.execute(
             """
             INSERT OR REPLACE INTO activations
@@ -412,25 +473,48 @@ class SQLiteBackend(StorageBackend):
             sb = StatBlock.from_array(layer, channel, flat)
             print(sb)
 
-            cur.execute(
-                """
-                INSERT OR REPLACE INTO stats
-                (layer, channel, count, mean, std, min, max, correlations, last_updated)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    sb.layer,
-                    sb.channel,
-                    sb.count,
-                    sb.mean,
-                    sb.std,
-                    sb.min,
-                    sb.max,
-                    json.dumps(sb.top_correlations),
-                    sb.last_updated,
-                ),
-            )
+        cur.execute("SELECT DISTINCT metric FROM metric_sums")
+        all_metrics = [row["metric"] for row in cur.fetchall()]
 
+        for row in cur.execute("SELECT * FROM stats WHERE count >= ?", (min_count,)):
+            layer, ch, N = row["layer"], row["channel"], row["count"]
+
+            print(row)
+
+            mu_x  = row["sum_x"] / N
+            var_x = row["sum_x2"] / N - mu_x**2
+            sigma_x = var_x ** 0.5 if var_x > 1e-12 else 0.0
+
+            print("stats", mu_x, var_x, sigma_x)
+
+            corrs = []
+            for metric in all_metrics:
+                print(metric)
+                ms = cur.execute(
+                    "SELECT count, sum_m, sum_m2, sum_xm FROM metric_sums "
+                    "WHERE metric=? AND layer=? AND channel=?",
+                    (metric, layer, ch)
+                ).fetchone()
+                if not ms or ms["count"] < min_count or sigma_x == 0:
+                    continue
+
+                mu_m  = ms["sum_m"] / ms["count"]
+                var_m = ms["sum_m2"] / ms["count"] - mu_m**2
+                sigma_m = var_m ** 0.5
+                if sigma_m < 1e-12:
+                    continue
+
+                rho = (ms["sum_xm"] / ms["count"] - mu_x * mu_m) / (sigma_x * sigma_m)
+                print("rho", rho)
+                corrs.append((metric, float(rho)))
+               
+
+            corrs.sort(key=lambda p: abs(p[1]), reverse=True)
+            cur.execute(
+                "UPDATE stats SET correlations=? WHERE layer=? AND channel=?",
+                (json.dumps(corrs[:5]), layer, ch),
+            )
+        self._conn.commit()
 
     # ------------------------------------------------------------------
     # Search -------------------------------------------------------------
