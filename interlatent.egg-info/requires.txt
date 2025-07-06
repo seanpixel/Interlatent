@@ -1,7 +1,0 @@
-
-[dev]
-gymnasium
-pytest
-
-[dev:platform_machine != "arm64"]
-torch==2.2.2+cpu
