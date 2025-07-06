@@ -1,0 +1,7 @@
+Metadata-Version: 2.4
+Name: interlatent
+Version: 0.0.0
+Provides-Extra: dev
+Requires-Dist: torch==2.2.2+cpu; platform_machine != "arm64" and extra == "dev"
+Requires-Dist: gymnasium; extra == "dev"
+Requires-Dist: pytest; extra == "dev"

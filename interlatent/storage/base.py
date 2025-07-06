@@ -93,7 +93,7 @@ class StorageBackend(abc.ABC):
     # ---------------------------------------------------------------------
 
     @abc.abstractmethod
-    def compute_stats(self, batch_size: int = 512) -> None:  # pragma: no cover
+    def compute_stats(self, *, min_count: int = 1) -> None:  # pragma: no cover
         """Scan activations and store/update :class:`StatBlock`s."""
 
     # ---------------------------------------------------------------------
@@ -111,3 +111,14 @@ class StorageBackend(abc.ABC):
     @abc.abstractmethod
     def prune_explanations(self, *, keep_most_recent: int = 3) -> None:  # pragma: no cover
         """Drop old explanation versions per channel, keeping *n* newest."""
+
+    @abc.abstractmethod
+    def iter_statblocks(
+        self,
+        layer: str | None = None,
+        channel: int | None = None,
+    ) -> Iterable[StatBlock]: ...
+
+    @abc.abstractmethod
+    def flush(self) -> None:
+        """Force-commit any buffered writes to the underlying store."""

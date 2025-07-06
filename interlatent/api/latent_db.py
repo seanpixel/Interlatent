@@ -125,18 +125,17 @@ class LatentDB:
     # Analysis -------------------------------------------------------------
     # ---------------------------------------------------------------------
 
-    def compute_stats(self, *, batch_size: int = 512, workers: int | None = None) -> None:
+    def compute_stats(self, *, min_count: int = 1, workers: int | None = None) -> None:
         """Compute/update :class:`StatBlock`s for all stored channels.
 
         This method *blocks* by default. For long‑running datasets you may
         pass ``workers=0`` and call :py:meth:`await_stats` later.
         """
-        fut = self._executor.submit(self._store.compute_stats, batch_size)
-        if workers is not None:
-            # fire‑and‑forget when workers=0 (or negative); otherwise block
-            if workers > 0:
-                fut.result()
-        else:
+        fut = self._executor.submit(
+            self._store.compute_stats,
+            min_count=min_count,        # ← pass as keyword
+        )
+        if workers is None or workers > 0:
             fut.result()
 
     def await_stats(self):
@@ -258,6 +257,18 @@ class LatentDB:
             for sb in self._store.iter_statblocks()
             if abs(sb.mean) < threshold
         ]
+    
+    def iter_statblocks(
+        self,
+        layer: str | None = None,
+        channel: int | None = None,
+    ) -> Iterable[StatBlock]:
+        """Yield StatBlocks, optionally filtered by layer / channel."""
+        yield from self._store.iter_statblocks(layer=layer, channel=channel)
+
+    def flush(self) -> None:
+        """Persist any buffered events immediately."""
+        self._store.flush()
 
     # ---------------------------------------------------------------------
     # Magic methods --------------------------------------------------------

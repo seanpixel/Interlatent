@@ -56,7 +56,7 @@ class RunInfo(BaseModel):
 # ---------------------------------------------------------------------------
 
 class ActivationEvent(BaseModel):
-    """Flattened activation values captured at a single forward step."""
+    """Flattened activation tensor captured at a single forward step."""
 
     # Composite primary key → (run_id, layer, channel, step)
     run_id: str = Field(...)
@@ -64,18 +64,18 @@ class ActivationEvent(BaseModel):
     layer: str = Field(...)
     channel: int = Field(..., ge=0)
 
-    values: List[float] = Field(..., description="Flattened float32 tensor.")
+    tensor: List[float] = Field(..., description="Flattened float32 tensor.")
     timestamp: str = Field(default_factory=_now, description="Wall‑clock capture time (UTC ISO).")
     context: Dict[str, Any] = Field(default_factory=dict, description="Instantaneous env info (score, x_pos, etc.)")
 
     # -- validation ---------------------------------------------------------
-    @validator("values", pre=True)
+    @validator("tensor", pre=True)
     def _flatten_numpy(cls, v):  # noqa: N805
         if isinstance(v, np.ndarray):
             return v.astype(np.float32).ravel().tolist()
         if isinstance(v, (list, tuple)):
             return list(v)
-        raise TypeError("values must be list/tuple/np.ndarray")
+        raise TypeError("tensor must be list/tuple/np.ndarray")
 
     class Config:
         frozen = True

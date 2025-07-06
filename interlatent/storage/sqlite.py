@@ -75,9 +75,9 @@ class SQLiteBackend(StorageBackend):
               step       INTEGER,
               layer      TEXT,
               channel    INTEGER,
-              values     TEXT,          -- JSON encoded list[float]
+              tensor     TEXT,          
               timestamp  TEXT,
-              context    TEXT,          -- JSON encoded dict
+              context    TEXT,      
               PRIMARY KEY (run_id, step, layer, channel)
             ) WITHOUT ROWID;
             """
@@ -93,7 +93,7 @@ class SQLiteBackend(StorageBackend):
               std          REAL,
               min          REAL,
               max          REAL,
-              correlations TEXT,      -- JSON encoded list[(str,float)]
+              correlations TEXT,      
               last_updated TEXT,
               PRIMARY KEY (layer, channel)
             ) WITHOUT ROWID;
@@ -161,7 +161,7 @@ class SQLiteBackend(StorageBackend):
         cur.execute(
             """
             INSERT OR REPLACE INTO activations
-            (run_id, step, layer, channel, values, timestamp, context)
+            (run_id, step, layer, channel, tensor, timestamp, context)
             VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
@@ -169,7 +169,7 @@ class SQLiteBackend(StorageBackend):
                 ev.step,
                 ev.layer,
                 ev.channel,
-                json.dumps(ev.values),
+                json.dumps(ev.tensor),
                 ev.timestamp,
                 json.dumps(ev.context),
             ),
@@ -263,7 +263,7 @@ class SQLiteBackend(StorageBackend):
         downsample: int = 1,
     ) -> Sequence[float]:
         cur = self._conn.cursor()
-        sql = ["SELECT values FROM activations WHERE layer=? AND channel=?"]
+        sql = ["SELECT tensor FROM activations WHERE layer=? AND channel=?"]
         params: list = [layer, channel]
         if t0 is not None:
             sql.append("AND step >= ?")
@@ -281,7 +281,7 @@ class SQLiteBackend(StorageBackend):
         # flatten JSON arrays
         out: list[float] = []
         for r in selected:
-            out.extend(json.loads(r["values"]))
+            out.extend(json.loads(r["tensor"]))
         return out
 
     def fetch_explanation(self, layer: str, channel: int) -> Explanation | None:
@@ -327,10 +327,25 @@ class SQLiteBackend(StorageBackend):
                 last_updated=row["last_updated"],
             )
 
-    def iter_statblocks(self) -> Iterable[StatBlock]:
+    def iter_statblocks(self, layer=None, channel=None):
         cur = self._conn.cursor()
-        cur.execute("SELECT * FROM stats")
+        query = "SELECT layer, channel, count, mean, std, min, max, correlations, last_updated FROM stats"
+        params = []
+        if layer is not None:
+            query += " WHERE layer = ?"
+            params.append(layer)
+            if channel is not None:
+                query += " AND channel = ?"
+                params.append(channel)
+        elif channel is not None:
+            query += " WHERE channel = ?"
+            params.append(channel)
+
+        cur.execute(query, params)
+
         for row in cur.fetchall():
+            print("row:", row)
+            print(row["count"])
             yield StatBlock(
                 layer=row["layer"],
                 channel=row["channel"],
@@ -347,44 +362,75 @@ class SQLiteBackend(StorageBackend):
     # Stats computation --------------------------------------------------
     # ------------------------------------------------------------------
 
-    def compute_stats(self, batch_size: int = 512) -> None:
+    def compute_stats(self, *, min_count: int = 1) -> None:
+        """
+        Aggregate per-(layer, channel) statistics and write them back into `stats`.
+        Parameters
+        ----------
+        min_count:
+            Skip channels with fewer than this many samples.
+        """
         cur = self._conn.cursor()
-        # Grab distinct layer/channel combos needing stats refresh
-        cur.execute("SELECT DISTINCT layer, channel FROM activations")
-        combos = cur.fetchall()
-        for combo in combos:
-            layer = combo["layer"]
-            channel = combo["channel"]
-            # fetch activations in batches to keep memory bounded
+
+        # Pull every (layer, channel) with at least min_count rows
+        cur.execute(
+            """
+            SELECT layer, channel, COUNT(*)
+            FROM activations
+            GROUP BY layer, channel
+            HAVING COUNT(*) >= ?
+            """,
+            (min_count,),
+        )
+        targets = cur.fetchall()
+
+        for row in targets:
+            layer   = row["layer"]
+            channel = row["channel"]
+            count   = row["COUNT(*)"]
+
+            # Fetch tensors for this (layer, channel)
             cur.execute(
-                "SELECT values FROM activations WHERE layer=? AND channel=?",
+                """
+                SELECT tensor
+                FROM activations
+                WHERE layer = ? AND channel = ?
+                """,
                 (layer, channel),
             )
-            buf = []
-            total_vals = []
-            for row in cur.fetchall():
-                arr = json.loads(row["values"])
-                buf.append(arr)
-                if len(buf) >= batch_size:
-                    total_vals.extend(np.concatenate(buf))
-                    buf = []
-            if buf:
-                total_vals.extend(np.concatenate(buf))
-            if not total_vals:
-                continue
-            arr_np = np.asarray(total_vals, dtype=np.float32)
-            sb = StatBlock(
-                layer=layer,
-                channel=channel,
-                count=arr_np.size,
-                mean=float(arr_np.mean()),
-                std=float(arr_np.std()),
-                min=float(arr_np.min()),
-                max=float(arr_np.max()),
-                top_correlations=[],  # filled later by dedicated job
-                last_updated=_now_iso(),
+
+            tensors = cur.fetchall()
+
+            flat: list[float] = []
+            for tensor_dict in tensors:
+                data = json.loads(tensor_dict["tensor"])
+                flat.extend(data)
+
+            if not flat:
+                continue  # nothing numeric, skip
+
+            sb = StatBlock.from_array(layer, channel, flat)
+            print(sb)
+
+            cur.execute(
+                """
+                INSERT OR REPLACE INTO stats
+                (layer, channel, count, mean, std, min, max, correlations, last_updated)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    sb.layer,
+                    sb.channel,
+                    sb.count,
+                    sb.mean,
+                    sb.std,
+                    sb.min,
+                    sb.max,
+                    json.dumps(sb.top_correlations),
+                    sb.last_updated,
+                ),
             )
-            self.write_statblock(sb)
+
 
     # ------------------------------------------------------------------
     # Search -------------------------------------------------------------
@@ -434,4 +480,7 @@ class SQLiteBackend(StorageBackend):
                 "DELETE FROM explanations WHERE layer=? AND channel=? AND version NOT IN (SELECT version FROM explanations WHERE layer=? AND channel=? ORDER BY version DESC LIMIT ?)",
                 (layer, channel, layer, channel, keep_most_recent),
             )
+        self._conn.commit()
+
+    def flush(self) -> None:
         self._conn.commit()
