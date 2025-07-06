@@ -79,11 +79,11 @@ class StorageBackend(abc.ABC):
     @abc.abstractmethod
     def fetch_explanation(self, layer: str, channel: int) -> Explanation | None:  # pragma: no cover
         """Return most‑recent explanation or ``None`` if absent."""
-
+        
     @abc.abstractmethod
     def unexplained(self, overwrite: bool) -> Iterable[StatBlock]:  # pragma: no cover
         """Yield StatBlocks needing a (new) explanation."""
-
+    
     @abc.abstractmethod
     def iter_statblocks(self) -> Iterable[StatBlock]:  # pragma: no cover
         """Stream all :class:`StatBlock`s (used for pruning, etc.)."""

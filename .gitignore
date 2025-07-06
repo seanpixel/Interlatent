@@ -38,3 +38,6 @@ Thumbs.db
 interlatent/**/__pycache__/
 interlatent/**/*.py[co]
 tests/**/__pycache__/
+
+# Pretrained models
+pretrained

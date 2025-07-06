@@ -72,6 +72,8 @@ class Collector:
             getattr(getattr(env, "spec", None), "id", None)  # e.g. "CartPole-v1"
             or env.__class__.__name__                        # fallback: "CartPoleEnv"
         )
+
+        action_space = env.action_space
                 
         run_id = uuid.uuid4().hex
         run_info = RunInfo(run_id=run_id, env_name=env_name or str(env), tags=tags or {})
@@ -80,22 +82,38 @@ class Collector:
 
         # Determine action function. We assume model(obs_tensor) → tensor action logits or direct action.
         def policy(obs):
-            # Gymnasium sometimes returns (obs, info)
+            # unwrap (obs, info) that Gymnasium reset/step may give back
             if isinstance(obs, (tuple, list)):
                 obs = obs[0]
 
-            with torch.no_grad():
-                logits = model(
-                    torch.as_tensor(obs, dtype=torch.float32, device=self.device).unsqueeze(0)
-                ).squeeze(0)         # shape: (out_dim,)
+            x = torch.as_tensor(obs, dtype=torch.float32, device=self.device).unsqueeze(0)
 
-            # --- map model output → valid env action ---
-            if hasattr(env.action_space, "n"):          # Discrete(n)
-                logits = logits[: env.action_space.n]   # trim if model has extra dims
+            with torch.no_grad():
+                out = model(x)
+
+            # ── normalize the variety of return types ─────────────────────
+            if isinstance(out, tuple):
+                # SB3 PPO returns (action, value, log_prob)  – keep the sampled action
+                out = out[0]
+            elif isinstance(out, dict):
+                # Custom nets might return a dict; try common keys or first value
+                out = out.get("logits") or out.get("action") or next(iter(out.values()))
+
+            if not torch.is_tensor(out):
+                raise TypeError("Model forward must return a Tensor, tuple or dict of Tensors")
+
+            # ── Discrete action handling ───────────────────────────────────
+            if out.dim() == 0 or (out.dim() == 1 and out.numel() == 1):
+                # already a sampled action (SB3)
+                return int(out.item())
+
+            if hasattr(action_space, "n"):           # Discrete logits
+                logits = out.squeeze(0)              # (1,n) → (n,)  or no-op if already (n,)
+                logits = logits[: action_space.n]    # trim oversize heads
                 return int(torch.argmax(logits).item())
 
-            # You can extend this branch for Box / MultiDiscrete later
             raise NotImplementedError("Collector demo-policy only supports discrete actions.")
+
         
         step_ctx: Dict[str, Any] = {}
         # Use TorchHook if available; else run without hooks.

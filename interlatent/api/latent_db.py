@@ -16,6 +16,7 @@ Design goals
 """
 from __future__ import annotations
 
+import json
 import importlib
 import inspect
 import textwrap
@@ -198,6 +199,48 @@ class LatentDB:
     # Querying -------------------------------------------------------------
     # ---------------------------------------------------------------------
 
+    def fetch_activations(
+        self,
+        *,
+        layer: str,
+        limit: int | None = None,
+    ) -> list[ActivationEvent]:
+        """
+        Return ActivationEvent rows for *all channels* of the given layer,
+        ordered by (step, channel).  Used by training datasets.
+
+        Parameters
+        ----------
+        layer : str
+            Layer name to pull.
+        limit : int | None
+            Optional hard cap on number of samples (per channel) for quick
+            experiments.
+        """
+        cur = self._store._conn.cursor()          # safe: read-only
+        sql = (
+            "SELECT run_id, step, layer, channel, tensor, context "
+            "FROM activations WHERE layer = ? "
+            "ORDER BY step, channel"
+        )
+        params = [layer]
+        if limit:
+            sql += " LIMIT ?"
+            params.append(limit)
+
+        rows = cur.execute(sql, params).fetchall()
+        return [
+            ActivationEvent(
+                run_id=r["run_id"],
+                step=r["step"],
+                layer=r["layer"],
+                channel=r["channel"],
+                tensor=json.loads(r["tensor"]),
+                context=json.loads(r["context"]) if r["context"] else {},
+            )
+            for r in rows
+        ]
+    
     def describe(self, layer: str, channel: int, *, as_dict: bool = False) -> str | dict[str, Any]:
         """Return the human‑readable description for a latent channel."""
         expl = self._store.fetch_explanation(layer, channel)
