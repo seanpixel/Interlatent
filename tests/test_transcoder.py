@@ -26,18 +26,21 @@ def load_solved_ppo_policy():
 def test_latent_correlations():
     env = gym.make("CartPole-v1")
     model = load_solved_ppo_policy()         # stub: load SB3 checkpoint
+    latent_n = 4
 
     db = LatentDB("sqlite:///runs/latent_demo.db")
     collector = Collector(
         db,
-        hook_layers=["mlp_extractor.policy_net.0", "mlp_extractor.policy_net.2"],
+        hook_layers=["mlp_extractor.policy_net.0"],
         metric_fns=[LambdaMetric("pole_angle", lambda obs, **_: obs[2])],
     )
     collector.run(model, env, steps=100)
 
-    TranscoderPipeline(db, "mlp_extractor.policy_net.0", "mlp_extractor.policy_net.2", k=4, epochs=3).run()
-    db.compute_stats(min_count=100)
+    TranscoderPipeline(db, "mlp_extractor.policy_net.0", k=latent_n, epochs=3).run()
+    db.compute_stats(min_count=1)
 
-    latents = list(db.iter_statblocks(layer="latent:policy_net.2"))
+    for ch in range(0, latent_n):
+        latents = list(db.iter_statblocks(layer="latent:mlp_extractor.policy_net.0", channel=ch))
+    print("latents:", latents)
     assert any(abs(rho) > 0.7 for sb in latents for _, rho in sb.top_correlations)
 

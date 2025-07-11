@@ -20,6 +20,7 @@ from .schema import ActivationEvent, RunInfo
 from .api.latent_db import LatentDB
 from .utils.logging import get_logger
 from .metrics import Metric
+from interlatent.hooks import PrePostHookCtx
 
 try:  # TorchHook will be implemented in hooks.py; we import lazily.
     from .hooks import TorchHook  # type: ignore
@@ -116,39 +117,49 @@ class Collector:
 
         
         step_ctx: Dict[str, Any] = {}
-        # Use TorchHook if available; else run without hooks.
+        step_ctx["metrics"] = {}
+        def ctx_supplier():   # closure visible to hooks
+            return step_ctx
+        
         hook_ctx = (
-            TorchHook(model, layers=self.hook_layers, db=self.db, run_id=run_id, context_supplier=lambda: step_ctx,)  # type: ignore
-            if TorchHook and self.hook_layers
+            PrePostHookCtx(
+                model,
+                layers=self.hook_layers,
+                db=self.db,
+                run_id=run_id,
+                context_supplier=ctx_supplier,
+                device=self.device,
+            )
+            if self.hook_layers
             else nullcontext()
         )
 
         with hook_ctx:
-            obs, _info = env.reset()
-            score, episode_len = 0.0, 0
+            obs, _ = env.reset()
+            score = episode_len = 0
 
             for step in range(steps):
+                step_ctx["step"] = step
                 act = policy(obs)
                 obs, reward, done, truncated, info = env.step(act)
-                score += float(reward)
-                episode_len += 1
 
                 metric_vals = {}
                 for m in self.metrics.values():
                     val = m.step(obs=obs, reward=reward, info=info)
                     if val is not None:
                         metric_vals[m.name] = float(val)
+                step_ctx["metrics"] = metric_vals
 
-                step_ctx.clear()
-                if metric_vals:
-                    step_ctx["metrics"] = metric_vals
+                score += float(reward)
+                episode_len += 1
 
                 if done:
                     for m in self.metrics.values():
                         m.reset()
-                    obs = env.reset()
-                    _LOG.debug("Episode done at step %d (len=%d, score=%f)", step, episode_len, score)
-                    episode_len, score = 0, 0.0
+                    obs, _ = env.reset()
+                    _LOG.debug("Episode done at step %d (len=%d, score=%f)",
+                               step, episode_len, score)
+                    score = episode_len = 0
 
         _LOG.info("Run %s finished (%d steps)", run_id, steps)
         self.db.flush()

@@ -16,12 +16,12 @@ reference cycles.
 """
 from __future__ import annotations
 
+import torch
+
 import itertools
 import weakref
-from contextlib import AbstractContextManager
+from contextlib import AbstractContextManager, ExitStack
 from typing import Dict, List, Sequence, Callable, Any, Optional
-
-import torch
 
 from .api.latent_db import LatentDB
 from .schema import ActivationEvent
@@ -136,3 +136,98 @@ class TorchHook(AbstractContextManager):
             if mod is None:
                 return None
         return mod
+
+
+class PrePostHookCtx:
+    """
+    Context manager that registers both pre- and post-forward hooks for the
+    requested layers, streaming to a LatentDB.
+    """
+
+    def __init__(
+        self,
+        model: torch.nn.Module,
+        layers: list[str],
+        *,
+        db: LatentDB,
+        run_id: str,
+        context_supplier,             # lambda -> dict containing 'step' + misc
+        device: torch.device | str = "cpu",
+    ):
+        self._model = model
+        self._layers = layers
+        self._db = db
+        self._run_id = run_id
+        self._ctx = context_supplier
+        self._device = torch.device(device)
+        self._stack = ExitStack()
+
+    # ------------------------------------------------------------------ enter/exit
+    def __enter__(self):
+        for name in self._layers:
+            mod = self._get_submodule(name)
+            if mod is None:
+                raise ValueError(f"Layer '{name}' not found in model")
+
+            # pre-forward
+            self._stack.enter_context(
+                mod.register_forward_pre_hook(self._make_cb(name, which="pre"))
+            )
+            # post-forward
+            self._stack.enter_context(
+                mod.register_forward_hook(self._make_cb(name, which="post"))
+            )
+        return self
+
+    def __exit__(self, *exc):
+        self._stack.close()
+        return False
+
+    # ------------------------------------------------------------------ helpers
+    def _get_submodule(self, dotted):
+        obj = self._model
+        for part in dotted.split("."):
+            obj = getattr(obj, part, None)
+            if obj is None:
+                return None
+        return obj
+
+    def _make_cb(self, layer_name: str, *, which: str):
+        tag = f"{layer_name}:{which}"
+
+        def _record(tensor):
+            tensor = tensor.detach().to("cpu")
+            if tensor.dim() == 2:            # (B, C)
+                for ch, col in enumerate(tensor.squeeze(0)):
+                    self._write(tag, ch, col)
+            else:                            # flatten everything
+                flat = tensor.view(-1)
+                for idx, val in enumerate(flat):
+                    self._write(tag, idx, val)
+
+        if which == "pre":
+            # pre signature: (module, inp)
+            def _cb(module, inp):
+                _record(inp[0])
+            return _cb
+        else:
+            # post signature: (module, inp, out)
+            def _cb(module, inp, out):
+                _record(out)
+            return _cb
+
+    def _write(self, layer_tag, channel, val):
+        ctx = self._ctx() or {}
+        step = ctx.get("step", 0)
+        self._db.write_event(
+            ActivationEvent(
+                run_id=self._run_id,
+                step=step,
+                layer=layer_tag,
+                channel=channel,
+                tensor=[float(val)],
+                context=ctx.get("metrics", {}),
+                value_sum=float(val),
+                value_sq_sum=float(val * val),
+            )
+        )

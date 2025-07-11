@@ -182,7 +182,6 @@ class SQLiteBackend(StorageBackend):
     # ------------------------------------------------------------------
 
     def write_event(self, ev: ActivationEvent) -> None:
-        
         cur = self._conn.cursor()
         metrics: dict[str, float] = ev.context.get("metrics", {})
         if metrics:                       # skip fast path if none
@@ -403,6 +402,7 @@ class SQLiteBackend(StorageBackend):
             query += " WHERE channel = ?"
             params.append(channel)
 
+        print(query, params)
         cur.execute(query, params)
 
         for row in cur.fetchall():
@@ -445,6 +445,8 @@ class SQLiteBackend(StorageBackend):
             (min_count,),
         )
         targets = cur.fetchall()
+
+        print("targets:", targets)
 
         for row in targets:
             layer   = row["layer"]

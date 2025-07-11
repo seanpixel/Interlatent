@@ -45,7 +45,7 @@ def test_cartpole_integration(tmp_path):
     # ------------------------------------------------------------------
     db.compute_stats()
 
-    statblocks = list(db.iter_statblocks(layer=0, channel=2))
+    statblocks = list(db.iter_statblocks(layer=0, channel=1))
     assert statblocks, "compute_stats produced no StatBlocks"
 
     # Basic sanity: means should be finite numbers.
