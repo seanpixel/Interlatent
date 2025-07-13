@@ -39,5 +39,6 @@ interlatent/**/__pycache__/
 interlatent/**/*.py[co]
 tests/**/__pycache__/
 
-# Pretrained models
+# models (transcoders and pretrained models)
 pretrained
+artifacts
