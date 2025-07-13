@@ -1,0 +1,1954 @@
+Directory Tree:
+interlatent/
+│   ├── schema.py
+│   ├── metrics.py
+│   ├── hooks.py
+│   ├── collector.py
+│   ├── __init__.py
+│   ├── train/
+│   │   ├── trainer.py
+│   │   ├── dataset.py
+│   │   ├── pipeline.py
+│   │   ├── __pycache__/ [EXCLUDED]
+│   ├── storage/
+│   │   ├── base.py
+│   │   ├── sqlite.py
+│   │   ├── __pycache__/ [EXCLUDED]
+│   ├── explain/
+│   ├── utils/
+│   │   ├── hook_utils.py
+│   │   ├── logging.py
+│   │   ├── __pycache__/ [EXCLUDED]
+│   ├── api/
+│   │   ├── latent_db.py
+│   │   ├── __init__.py
+│   │   ├── __pycache__/ [EXCLUDED]
+│   ├── __pycache__/ [EXCLUDED]
+│   ├── analysis/
+│   ├── models/
+│   │   ├── linear_transcoder.py
+
+
+
+
+# ======================
+# File: schema.py
+# ======================
+
+"""interlatent.schema
+
+Shared data objects that flow through the Interlatent pipeline.
+Every bit that crosses module boundaries or hits persistent storage
+_validates_ against one of these Pydantic models.  Think of them as the
+contract binding Collector ↔ Trainer ↔ LLM ↔ UI.
+
+Tables & Lineage
+----------------
+1. **runs**           – metadata for a replay / simulation episode
+2. **activations**    – many per‑run tensor snapshots (`ActivationEvent`)
+3. **stats**          – aggregate properties of a channel (`StatBlock`)
+4. **explanations**   – human‑readable blurbs (`Explanation`)
+5. **artifacts**      – model files (e.g. trained transcoders)
+"""
+from __future__ import annotations
+
+import datetime as _dt
+import uuid as _uuid
+from typing import Any, Dict, List, Mapping, Sequence, Tuple
+
+import numpy as np
+from pydantic import BaseModel, Field, validator
+
+# ---------------------------------------------------------------------------
+# Utilities -----------------------------------------------------------------
+# ---------------------------------------------------------------------------
+
+def _now() -> str:
+    """Return current UTC time in ISO‑8601 with trailing Z."""
+    return _dt.datetime.utcnow().isoformat(timespec="milliseconds") + "Z"
+
+
+def _uuid() -> str:  # noqa: D401 – function not method
+    return _uuid.uuid4().hex
+
+
+# ---------------------------------------------------------------------------
+# 0. RunInfo -----------------------------------------------------------------
+# ---------------------------------------------------------------------------
+
+class RunInfo(BaseModel):
+    """Metadata about a single simulation/game episode."""
+
+    run_id: str = Field(default_factory=_uuid, description="Primary key shared by all events in this run.")
+    env_name: str = Field(..., description="Gym environment or dataset identifier.")
+    start_time: str = Field(default_factory=_now)
+    tags: Dict[str, Any] = Field(default_factory=dict, description="User‑supplied arbitrary labels (seed, difficulty, …).")
+
+    class Config:
+        frozen = True
+
+
+# ---------------------------------------------------------------------------
+# 1. ActivationEvent ---------------------------------------------------------
+# ---------------------------------------------------------------------------
+
+class ActivationEvent(BaseModel):
+    """Flattened activation tensor captured at a single forward step."""
+
+    # Composite primary key → (run_id, layer, channel, step)
+    run_id: str = Field(...)
+    step: int = Field(..., ge=0, description="Timestep or frame index within the run.")
+    layer: str = Field(...)
+    channel: int = Field(..., ge=0)
+
+    value_sum: float | None = None
+    value_sq_sum: float | None = None
+
+    tensor: List[float] = Field(..., description="Flattened float32 tensor.")
+    timestamp: str = Field(default_factory=_now, description="Wall‑clock capture time (UTC ISO).")
+    context: Dict[str, Any] = Field(default_factory=dict, description="Instantaneous env info (score, x_pos, etc.)")
+
+    # -- validation ---------------------------------------------------------
+    @validator("tensor", pre=True)
+    def _flatten_numpy(cls, v):  # noqa: N805
+        if isinstance(v, np.ndarray):
+            return v.astype(np.float32).ravel().tolist()
+        if isinstance(v, (list, tuple)):
+            return list(v)
+        raise TypeError("tensor must be list/tuple/np.ndarray")
+
+    class Config:
+        frozen = True
+        json_encoders = {np.ndarray: lambda arr: arr.tolist()}
+
+
+# ---------------------------------------------------------------------------
+# 2. StatBlock ---------------------------------------------------------------
+# ---------------------------------------------------------------------------
+
+class StatBlock(BaseModel):
+    """Aggregated statistics for a given (layer, channel)."""
+
+    layer: str
+    channel: int
+
+    count: int = Field(..., gt=0)
+    mean: float
+    std: float
+    min: float
+    max: float
+
+    # List of ("other_layer:idx", pearson_corr) sorted by |corr| desc.
+    top_correlations: List[Tuple[str, float]] = Field(default_factory=list)
+
+    last_updated: str = Field(default_factory=_now)
+
+    # Convenience -----------------------------------------------------------
+    @classmethod
+    def from_array(cls, layer: str, channel: int, arr: Sequence[float]):
+        arr_np = np.asarray(arr, dtype=np.float32)
+        return cls(
+            layer=layer,
+            channel=channel,
+            count=arr_np.size,
+            mean=float(arr_np.mean()),
+            std=float(arr_np.std()),
+            min=float(arr_np.min()),
+            max=float(arr_np.max()),
+        )
+
+
+# ---------------------------------------------------------------------------
+# 3. Explanation -------------------------------------------------------------
+# ---------------------------------------------------------------------------
+
+class Explanation(BaseModel):
+    """Human‑authored description of what a latent detects."""
+
+    layer: str
+    channel: int
+    version: int = Field(1, ge=1, description="Monotonic revision number per channel.")
+    text: str = Field(..., description="Concise prose <= 500 chars.")
+    source: str = Field("llm", description="Origin (llm, human, etc.)")
+    created_at: str = Field(default_factory=_now)
+
+    class Config:
+        frozen = True
+
+
+# ---------------------------------------------------------------------------
+# 4. Artifact (e.g. trained transcoder) -------------------------------------
+# ---------------------------------------------------------------------------
+
+class Artifact(BaseModel):
+    """Binary blob on disk/S3 plus searchable metadata."""
+
+    artifact_id: str = Field(default_factory=_uuid)
+    kind: str = Field(..., description="'transcoder', 'checkpoint', …")
+    path: str = Field(..., description="Filesystem or S3 path to the file.")
+
+    meta: Mapping[str, Any] = Field(default_factory=dict)
+    created_at: str = Field(default_factory=_now)
+
+    class Config:
+        frozen = True
+
+
+# ---------------------------------------------------------------------------
+# Public export --------------------------------------------------------------
+# ---------------------------------------------------------------------------
+
+__all__ = [
+    "RunInfo",
+    "ActivationEvent",
+    "StatBlock",
+    "Explanation",
+    "Artifact",
+]
+
+
+# ======================
+# File: metrics.py
+# ======================
+
+from __future__ import annotations
+from typing import Protocol, Any, Dict, Callable, Optional
+
+
+class Metric(Protocol):
+    """
+    A “metric” produces one scalar per timestep and can reset at episode-end.
+    """
+
+    name: str
+
+    def reset(self) -> None: ...
+    def step(self, *, obs, reward, info) -> Optional[float]: ...
+
+
+class LambdaMetric:
+    """
+    Wrap any `(obs, reward, info) -> scalar` into a Metric.
+    Example
+    -------
+    pole_ang = LambdaMetric("pole_angle", lambda obs, **_: float(obs[2]))
+    """
+
+    def __init__(self, name: str, fn: Callable[..., float | None]):
+        self.name, self._fn = name, fn
+
+    def reset(self) -> None:
+        # stateless lambda never needs resetting
+        pass
+
+    def step(self, *, obs, reward, info):
+        return self._fn(obs=obs, reward=reward, info=info)
+
+
+class EpisodeAccumulator:
+    """
+    Accumulates a per-step value (e.g., reward) over an episode,
+    emits the running total every step, and resets at `env.reset()`.
+    """
+
+    def __init__(self, name: str, fn: Callable[..., float]):
+        self.name, self._fn = name, fn
+        self._acc = 0.0
+
+    def reset(self) -> None:
+        self._acc = 0.0
+
+    def step(self, *, obs, reward, info):
+        self._acc += self._fn(obs=obs, reward=reward, info=info)
+        return self._acc
+
+__all__ = ["Metric", "LambdaMetric", "EpisodeAccumulator"]
+
+
+# ======================
+# File: hooks.py
+# ======================
+
+"""interlatent.hooks
+
+Torch-specific forward-hook utilities.
+
+`TorchHook` is a *context manager*; inside the `with` block, every forward
+pass through the specified layers emits `ActivationEvent`s into a
+`LatentDB`.  Leave the context and all hooks auto‑deregister, avoiding
+reference cycles.
+
+*Assumptions* (v0):
+• Activations are `torch.Tensor`s shaped *(B, C, …)* where dimension 1 is
+  the channel index.  We flatten spatial dims per channel.  Works for
+  linear layers too because spatial dims = 0.
+• Batch size may vary. Each sample in the batch gets its own event with
+  consecutive `step` numbers local to the run.
+"""
+from __future__ import annotations
+
+import torch
+
+import itertools
+import weakref
+from contextlib import AbstractContextManager, ExitStack
+from typing import Dict, List, Sequence, Callable, Any, Optional
+
+from .api.latent_db import LatentDB
+from .schema import ActivationEvent
+from .utils.logging import get_logger
+
+_LOG = get_logger(__name__)
+
+__all__ = ["TorchHook"]
+
+
+class TorchHook(AbstractContextManager):
+    """Register forward hooks that push activations into LatentDB."""
+
+    def __init__(
+        self,
+        model: torch.nn.Module,
+        *,
+        context_supplier: Optional[Callable[[], Dict[str, Any]]] = None,
+        layers: Sequence[str],
+        db: LatentDB,
+        run_id: str,
+        max_channels: int | None = None,  # keep memory sane for huge convs
+    ) -> None:
+        self.model = model
+        self.layers = list(layers)
+        self.db = db
+        self.run_id = run_id
+        self.max_channels = max_channels
+        self._ctx_fn = context_supplier or (lambda: {})
+
+        self._handles: List[torch.utils.hooks.RemovableHandle] = []
+        self._step_counter = itertools.count().__next__  # atomic-ish counter
+
+        # Map layer names to modules; allow attribute dotted paths.
+        self._module_lookup: Dict[str, torch.nn.Module] = {}
+        for name in self.layers:
+            mod = self._find_submodule(model, name)
+            if mod is None:
+                raise ValueError(f"Layer '{name}' not found in model")
+            self._module_lookup[name] = mod
+
+    # ------------------------------------------------------------------
+    # Context manager protocol -----------------------------------------
+    # ------------------------------------------------------------------
+
+    def __enter__(self):
+        for layer_name, module in self._module_lookup.items():
+            handle = module.register_forward_hook(self._make_hook(layer_name))
+            self._handles.append(handle)
+        _LOG.debug("TorchHook registered %d hooks", len(self._handles))
+        return self
+
+    def __exit__(self, exc_type, exc, tb):  # noqa: D401
+        for h in self._handles:
+            h.remove()
+        self._handles.clear()
+        _LOG.debug("TorchHook removed hooks")
+        return False  # propagate exceptions
+
+    # ------------------------------------------------------------------
+    # Internal helpers --------------------------------------------------
+    # ------------------------------------------------------------------
+
+    def _make_hook(self, layer_name: str):
+        """Factory returning the closure used as forward_hook."""
+
+        db_ref = weakref.ref(self.db)
+        run_id = self.run_id
+        max_channels = self.max_channels
+        step_counter = self._step_counter
+
+        def _hook(module, inp, out):  # noqa: D401 – PyTorch hook signature
+            db = db_ref()
+            if db is None:
+                return  # LatentDB GC'ed? should not happen.
+
+            tensor = out.detach().cpu()
+            if tensor.ndim < 2:
+                tensor = tensor.unsqueeze(1)  # (B,1)
+            B, C = tensor.shape[:2]
+            if max_channels is not None:
+                C = min(C, max_channels)
+                tensor = tensor[:, :C]
+
+            # Flatten spatial dims per channel
+            tensor = tensor.reshape(B, C, -1)
+
+            for b in range(B):
+                step = step_counter()
+                for ch in range(C):
+                    vals = tensor[b, ch].float().view(-1)
+                    ctx = dict(self._ctx_fn())
+                    ev = ActivationEvent(
+                        run_id=run_id,
+                        step=step,
+                        layer=layer_name,
+                        channel=ch,
+                        tensor=vals.tolist(),
+                        value_sum=float(vals.sum()),
+                        value_sq_sum=float((vals**2).sum()),
+                        context=ctx,  
+                    )
+                    db.write_event(ev)
+
+        return _hook
+
+    @staticmethod
+    def _find_submodule(root: torch.nn.Module, dotted: str):
+        mod = root
+        for attr in dotted.split("."):
+            mod = getattr(mod, attr, None)
+            if mod is None:
+                return None
+        return mod
+
+
+class PrePostHookCtx:
+    """
+    Context manager that registers both pre- and post-forward hooks for the
+    requested layers, streaming to a LatentDB.
+    """
+
+    def __init__(
+        self,
+        model: torch.nn.Module,
+        layers: list[str],
+        *,
+        db: LatentDB,
+        run_id: str,
+        context_supplier,             # lambda -> dict containing 'step' + misc
+        device: torch.device | str = "cpu",
+    ):
+        self._model = model
+        self._layers = layers
+        self._db = db
+        self._run_id = run_id
+        self._ctx = context_supplier
+        self._device = torch.device(device)
+        self._stack = ExitStack()
+
+    # ------------------------------------------------------------------ enter/exit
+    def __enter__(self):
+        for name in self._layers:
+            mod = self._get_submodule(name)
+            if mod is None:
+                raise ValueError(f"Layer '{name}' not found in model")
+
+            # pre-forward
+            self._stack.enter_context(
+                mod.register_forward_pre_hook(self._make_cb(name, which="pre"))
+            )
+            # post-forward
+            self._stack.enter_context(
+                mod.register_forward_hook(self._make_cb(name, which="post"))
+            )
+        return self
+
+    def __exit__(self, *exc):
+        self._stack.close()
+        return False
+
+    # ------------------------------------------------------------------ helpers
+    def _get_submodule(self, dotted):
+        obj = self._model
+        for part in dotted.split("."):
+            obj = getattr(obj, part, None)
+            if obj is None:
+                return None
+        return obj
+
+    def _make_cb(self, layer_name: str, *, which: str):
+        tag = f"{layer_name}:{which}"
+
+        def _record(tensor):
+            tensor = tensor.detach().to("cpu")
+            if tensor.dim() == 2:            # (B, C)
+                for ch, col in enumerate(tensor.squeeze(0)):
+                    self._write(tag, ch, col)
+            else:                            # flatten everything
+                flat = tensor.view(-1)
+                for idx, val in enumerate(flat):
+                    self._write(tag, idx, val)
+
+        if which == "pre":
+            # pre signature: (module, inp)
+            def _cb(module, inp):
+                _record(inp[0])
+            return _cb
+        else:
+            # post signature: (module, inp, out)
+            def _cb(module, inp, out):
+                _record(out)
+            return _cb
+
+    def _write(self, layer_tag, channel, val):
+        ctx = self._ctx() or {}
+        step = ctx.get("step", 0)
+        self._db.write_event(
+            ActivationEvent(
+                run_id=self._run_id,
+                step=step,
+                layer=layer_tag,
+                channel=channel,
+                tensor=[float(val)],
+                context=ctx.get("metrics", {}),
+                value_sum=float(val),
+                value_sq_sum=float(val * val),
+            )
+        )
+
+
+# ======================
+# File: collector.py
+# ======================
+
+"""interlatent.collector
+
+Utility that runs a model in an environment or dataloader, streams
+ActivationEvents into a LatentDB, and returns basic run statistics.
+
+Intended for quick experiments—not a full RL rollout manager.  Works with
+any env that exposes the classic Gym API (`reset`, `step`).
+"""
+from __future__ import annotations
+
+import time
+import uuid
+from contextlib import nullcontext
+from typing import Dict, List, Optional, Sequence, Any
+
+import numpy as np
+import torch
+
+from .schema import ActivationEvent, RunInfo
+from .api.latent_db import LatentDB
+from .utils.logging import get_logger
+from .metrics import Metric
+from interlatent.hooks import PrePostHookCtx
+
+try:  # TorchHook will be implemented in hooks.py; we import lazily.
+    from .hooks import TorchHook  # type: ignore
+except ImportError:  # pragma: no cover – until hooks.py exists
+    TorchHook = None  # type: ignore
+
+_LOG = get_logger(__name__)
+
+__all__ = ["Collector"]
+
+
+class Collector:
+    """Streams activations during a simulation run into a LatentDB."""
+
+    def __init__(
+        self,
+        db: LatentDB,
+        *,
+        metric_fns: list[Metric] | None = None,
+        hook_layers: Sequence[str] | None = None,
+        batch_size: int = 1,
+        device: str | torch.device = "cuda" if torch.cuda.is_available() else "cpu",
+    ) -> None:
+        self.db = db
+        self.metrics = {m.name: m for m in (metric_fns or [])}
+        self.hook_layers = hook_layers or []  # empty → no activations captured
+        self.batch_size = batch_size
+        self.device = device
+
+    # ------------------------------------------------------------------
+    # Public entry ------------------------------------------------------
+    # ------------------------------------------------------------------
+
+    def run(self, model: torch.nn.Module, env, *, steps: int = 10_000, tags: Optional[Dict] = None) -> RunInfo:
+        """Execute *steps* interactions and record activations.
+
+        Parameters
+        ----------
+        model:
+            PyTorch policy/network; must accept env observations as first arg.
+        env:
+            Object implementing `reset() -> obs` and `step(action)`.
+        steps:
+            Number of timesteps to collect.
+        tags:
+            Arbitrary user metadata (seed, difficulty…).
+        """
+
+        env_name = (
+            getattr(getattr(env, "spec", None), "id", None)  # e.g. "CartPole-v1"
+            or env.__class__.__name__                        # fallback: "CartPoleEnv"
+        )
+
+        action_space = env.action_space
+                
+        run_id = uuid.uuid4().hex
+        run_info = RunInfo(run_id=run_id, env_name=env_name or str(env), tags=tags or {})
+
+        model.eval().to(self.device)
+
+        # Determine action function. We assume model(obs_tensor) → tensor action logits or direct action.
+        def policy(obs):
+            # unwrap (obs, info) that Gymnasium reset/step may give back
+            if isinstance(obs, (tuple, list)):
+                obs = obs[0]
+
+            x = torch.as_tensor(obs, dtype=torch.float32, device=self.device).unsqueeze(0)
+
+            with torch.no_grad():
+                out = model(x)
+
+            # ── normalize the variety of return types ─────────────────────
+            if isinstance(out, tuple):
+                # SB3 PPO returns (action, value, log_prob)  – keep the sampled action
+                out = out[0]
+            elif isinstance(out, dict):
+                # Custom nets might return a dict; try common keys or first value
+                out = out.get("logits") or out.get("action") or next(iter(out.values()))
+
+            if not torch.is_tensor(out):
+                raise TypeError("Model forward must return a Tensor, tuple or dict of Tensors")
+
+            # ── Discrete action handling ───────────────────────────────────
+            if out.dim() == 0 or (out.dim() == 1 and out.numel() == 1):
+                # already a sampled action (SB3)
+                return int(out.item())
+
+            if hasattr(action_space, "n"):           # Discrete logits
+                logits = out.squeeze(0)              # (1,n) → (n,)  or no-op if already (n,)
+                logits = logits[: action_space.n]    # trim oversize heads
+                return int(torch.argmax(logits).item())
+
+            raise NotImplementedError("Collector demo-policy only supports discrete actions.")
+
+        
+        step_ctx: Dict[str, Any] = {}
+        step_ctx["metrics"] = {}
+        def ctx_supplier():   # closure visible to hooks
+            return step_ctx
+        
+        hook_ctx = (
+            PrePostHookCtx(
+                model,
+                layers=self.hook_layers,
+                db=self.db,
+                run_id=run_id,
+                context_supplier=ctx_supplier,
+                device=self.device,
+            )
+            if self.hook_layers
+            else nullcontext()
+        )
+
+        with hook_ctx:
+            obs, _ = env.reset()
+            score = episode_len = 0
+
+            for step in range(steps):
+                step_ctx["step"] = step
+                act = policy(obs)
+                obs, reward, done, truncated, info = env.step(act)
+
+                metric_vals = {}
+                for m in self.metrics.values():
+                    val = m.step(obs=obs, reward=reward, info=info)
+                    if val is not None:
+                        metric_vals[m.name] = float(val)
+                step_ctx["metrics"] = metric_vals
+
+                score += float(reward)
+                episode_len += 1
+
+                if done:
+                    for m in self.metrics.values():
+                        m.reset()
+                    obs, _ = env.reset()
+                    _LOG.debug("Episode done at step %d (len=%d, score=%f)",
+                               step, episode_len, score)
+                    score = episode_len = 0
+
+        _LOG.info("Run %s finished (%d steps)", run_id, steps)
+        self.db.flush()
+        return run_info
+
+
+# ======================
+# File: __init__.py
+# ======================
+
+# interlatent/__init__.py
+from importlib import metadata as _md
+
+__version__ = _md.version(__name__) if _md.packages_distributions().get(__name__) else "0.0.dev"
+# Nothing else yet; keep root namespace clean
+
+
+# ======================
+# File: train/trainer.py
+# ======================
+
+import torch
+import torch.nn as nn
+
+class TranscoderTrainer:
+    def __init__(self, in_dim, out_dim, k_latent):
+        self.T = nn.Linear(in_dim, k_latent, bias=False)   # encoder
+        self.R = nn.Linear(k_latent, out_dim, bias=False)  # decoder
+
+    def train(self, loader, *, epochs=5, lr=1e-3, l1=1e-3, device="cpu"):
+        self.T.to(device); self.R.to(device)
+        opt = torch.optim.Adam(list(self.T.parameters()) + list(self.R.parameters()), lr=lr)
+
+        for _ in range(epochs):
+            for x_pre, x_post in loader:
+                x_pre, x_post = x_pre.to(device), x_post.to(device)
+                z      = self.T(x_pre)
+                recon  = self.R(z)
+                mse    = ((recon - x_post) ** 2).mean()
+                spars  = z.abs().mean()
+                loss   = mse + l1 * spars
+                opt.zero_grad(); loss.backward(); opt.step()
+        return {
+            "encoder": self.T.cpu().state_dict(),
+            "decoder": self.R.cpu().state_dict(),
+        }
+
+
+# ======================
+# File: train/dataset.py
+# ======================
+
+from __future__ import annotations
+from typing import Sequence, List
+
+import torch
+from torch.utils.data import Dataset
+
+from interlatent.api import LatentDB
+from interlatent.schema import ActivationEvent
+
+class ActivationPairDataset(Dataset):
+    """
+    Returns (x_pre, x_post) for a single layer.
+    Assumes you logged with names  {layer}:pre  and  {layer}:post
+    """
+
+    def __init__(self, db: LatentDB, layer: str, *, limit: int | None = None):
+        pre_tag, post_tag = f"{layer}:pre", f"{layer}:post"
+
+        rows_pre  = db.fetch_activations(layer=pre_tag,  limit=limit)
+        rows_post = db.fetch_activations(layer=post_tag, limit=limit)
+        if not rows_pre or not rows_post:
+            raise ValueError(f"Missing activations for '{layer}'")
+
+        run_id = rows_pre[0].run_id                     # keep a single run
+        rows_pre  = [r for r in rows_pre  if r.run_id == run_id]
+        rows_post = [r for r in rows_post if r.run_id == run_id]
+
+        self.samples = list(zip(*map(self._pack, (rows_pre, rows_post))))
+        self.in_dim, self.out_dim = map(len, self.samples[0])
+
+    # ----------------------------------------------------------------------
+    @staticmethod
+    def _pack(rows):
+        vecs, buf, step_prev = [], [], None
+        for ev in rows:
+            if step_prev is None:
+                step_prev = ev.step
+            if ev.step != step_prev:
+                vecs.append(torch.tensor(buf, dtype=torch.float32))
+                buf, step_prev = [], ev.step
+            buf.append(sum(ev.tensor))                  # scalar per channel
+        if buf:
+            vecs.append(torch.tensor(buf, dtype=torch.float32))
+        return vecs
+
+    # standard Dataset API
+    def __len__(self):            return len(self.samples)
+    def __getitem__(self, idx):   return self.samples[idx]
+
+
+# ======================
+# File: train/pipeline.py
+# ======================
+
+from interlatent.train.trainer import TranscoderTrainer
+from interlatent.train.dataset import ActivationPairDataset
+from interlatent.schema import ActivationEvent
+
+import torch
+from torch.utils.data import DataLoader
+
+class TranscoderPipeline:
+    """
+    Learn a sparse bottleneck for ONE layer.
+      • Fetches activations logged as  {layer}:pre  and  {layer}:post
+      • Writes latents back to DB as   latent:{layer}
+    """
+
+    def __init__(self, db, layer: str, *, k: int = 32, epochs: int = 5):
+        self.db, self.layer, self.k, self.epochs = db, layer, k, epochs
+
+    def run(self):
+        ds = ActivationPairDataset(self.db, self.layer)
+        loader = DataLoader(ds, batch_size=256, shuffle=True)
+
+        trainer = TranscoderTrainer(ds.in_dim, ds.out_dim, self.k)
+        trainer.train(loader, epochs=self.epochs)
+        self._write_latents(trainer.T, ds)
+
+        return trainer
+
+    def _write_latents(self, encoder, dataset):
+        latent_layer = f"latent:{self.layer}"
+        print("latent_layer:", latent_layer)
+        encoder.eval()
+
+        with torch.no_grad():
+            for step, (x_pre, _) in enumerate(dataset):
+                z = encoder(x_pre.unsqueeze(0))          # (1, k)
+                for idx, val in enumerate(z.squeeze(0)): # scalar per latent
+                    self.db.write_event(
+                        ActivationEvent(
+                            run_id="latent_run",
+                            step=step,
+                            layer=latent_layer,
+                            channel=idx,
+                            tensor=[float(val)],
+                            context={},
+                            value_sum=float(val),
+                            value_sq_sum=float(val * val),
+                        )
+                    )
+        self.db.flush()
+
+
+# ======================
+# File: storage/base.py
+# ======================
+
+"""interlatent.storage.base
+
+Abstract persistence layer.
+All concrete back‑ends—SQLite, DynamoDB, Postgres, etc.—inherit from
+:class:`StorageBackend` and implement the same small surface area so the
+rest of the library can stay blissfully ignorant of where bits live.
+
+Design notes
+------------
+* Keep the interface *minimal but complete*—only methods required by
+  `LatentDB` and training/LLM workers appear here.
+* The contract is **sync**, not async.  Async back‑ends can wrap their
+  I/O but must present blocking semantics here.
+* Docs & unit tests will lock this API; breaking changes need version
+  bumps.
+"""
+from __future__ import annotations
+
+import abc
+from typing import Iterable, List, Sequence, Tuple
+
+from ..schema import ActivationEvent, Artifact, Explanation, StatBlock
+
+__all__ = ["StorageBackend"]
+
+
+class StorageBackend(abc.ABC):
+    """Abstract base class for persistent storage."""
+
+    # ---------------------------------------------------------------------
+    # Construction / teardown --------------------------------------------
+    # ---------------------------------------------------------------------
+
+    def __init__(self, uri: str):
+        self._uri = uri
+
+    # Concrete back‑ends must ensure tables exist when instantiated.
+
+    # ------------------------------
+    def close(self):  # noqa: D401 – not a context manager here
+        """Optional: close DB connections / flush buffers."""
+        pass
+
+    # ---------------------------------------------------------------------
+    # Write path -----------------------------------------------------------
+    # ---------------------------------------------------------------------
+
+    @abc.abstractmethod
+    def write_event(self, ev: ActivationEvent) -> None:  # pragma: no cover
+        """Persist an :class:`ActivationEvent`."""
+
+    @abc.abstractmethod
+    def write_statblock(self, sb: StatBlock) -> None:  # pragma: no cover
+        """Insert or update a :class:`StatBlock`."""
+
+    @abc.abstractmethod
+    def write_explanation(self, ex: Explanation) -> None:  # pragma: no cover
+        """Insert an :class:`Explanation` (new version row)."""
+
+    @abc.abstractmethod
+    def write_artifact(self, art: Artifact) -> None:  # pragma: no cover
+        """Register a file/weights blob in the artifact catalogue."""
+
+    # ---------------------------------------------------------------------
+    # Read / query ---------------------------------------------------------
+    # ---------------------------------------------------------------------
+
+    @abc.abstractmethod
+    def fetch_events(
+        self,
+        layer: str,
+        channel: int,
+        t0: float | None = None,
+        t1: float | None = None,
+        downsample: int = 1,
+    ) -> Sequence[float]:  # pragma: no cover
+        """Return flattened activation values satisfying the filter."""
+
+    @abc.abstractmethod
+    def fetch_explanation(self, layer: str, channel: int) -> Explanation | None:  # pragma: no cover
+        """Return most‑recent explanation or ``None`` if absent."""
+        
+    @abc.abstractmethod
+    def unexplained(self, overwrite: bool) -> Iterable[StatBlock]:  # pragma: no cover
+        """Yield StatBlocks needing a (new) explanation."""
+    
+    @abc.abstractmethod
+    def iter_statblocks(self) -> Iterable[StatBlock]:  # pragma: no cover
+        """Stream all :class:`StatBlock`s (used for pruning, etc.)."""
+
+    # ---------------------------------------------------------------------
+    # Analysis helpers -----------------------------------------------------
+    # ---------------------------------------------------------------------
+
+    @abc.abstractmethod
+    def compute_stats(self, *, min_count: int = 1) -> None:  # pragma: no cover
+        """Scan activations and store/update :class:`StatBlock`s."""
+
+    # ---------------------------------------------------------------------
+    # Search utilities -----------------------------------------------------
+    # ---------------------------------------------------------------------
+
+    @abc.abstractmethod
+    def search_explanations(self, query: str, k: int = 10) -> List[Explanation]:  # pragma: no cover
+        """Naïve full‑text search; back‑ends may override with FTS/vectors."""
+
+    # ---------------------------------------------------------------------
+    # House‑keeping --------------------------------------------------------
+    # ---------------------------------------------------------------------
+
+    @abc.abstractmethod
+    def prune_explanations(self, *, keep_most_recent: int = 3) -> None:  # pragma: no cover
+        """Drop old explanation versions per channel, keeping *n* newest."""
+
+    @abc.abstractmethod
+    def iter_statblocks(
+        self,
+        layer: str | None = None,
+        channel: int | None = None,
+    ) -> Iterable[StatBlock]: ...
+
+    @abc.abstractmethod
+    def flush(self) -> None:
+        """Force-commit any buffered writes to the underlying store."""
+
+
+# ======================
+# File: storage/sqlite.py
+# ======================
+
+"""interlatent.storage.sqlite
+
+A lightweight, zero‑dependency SQLite implementation of
+:class:`interlatent.storage.base.StorageBackend`.
+
+SQLite is perfect for single‑machine research workflows: it ships with
+Python, handles moderate write QPS, and offers FTS5 for full‑text search
+(without extra binaries).  This driver keeps schema creation minimal but
+future‑proof—migrations can append columns without breaking callers.
+"""
+from __future__ import annotations
+
+import json
+import pathlib
+import sqlite3
+import time
+from collections import defaultdict
+from typing import Iterable, List, Sequence, Tuple
+
+import numpy as np
+
+from ..schema import ActivationEvent, Artifact, Explanation, StatBlock
+from .base import StorageBackend
+
+# ---------------------------------------------------------------------------
+# Helpers -------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+
+_ISO_DATE_FMT = "%Y-%m-%dT%H:%M:%S.%fZ"
+
+
+def _now_iso() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()) + "Z"
+
+
+def _dict_factory(cursor, row):
+    # Return rows as dicts for convenience.
+    return {col[0]: row[idx] for idx, col in enumerate(cursor.description)}
+
+
+# ---------------------------------------------------------------------------
+# SQLiteBackend --------------------------------------------------------------
+# ---------------------------------------------------------------------------
+
+
+class SQLiteBackend(StorageBackend):
+    """SQLite driver—stores everything in a single .db file."""
+
+    def __init__(self, uri: str):
+        super().__init__(uri)
+        if uri.startswith("sqlite:///"):
+            path = uri[len("sqlite:///") :]
+        elif uri.startswith("file:///"):
+            path = uri[len("file:///") :]
+        else:
+            # fallback: treat uri as direct path
+            path = uri
+        self._path = pathlib.Path(path).expanduser().resolve()
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._conn = sqlite3.connect(self._path, check_same_thread=False)
+        self._conn.row_factory = _dict_factory
+        self._ensure_schema()
+
+    # ------------------------------------------------------------------
+    # Schema creation ---------------------------------------------------
+    # ------------------------------------------------------------------
+
+    def _ensure_schema(self):
+        cur = self._conn.cursor()
+        # activations table
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS activations (
+              run_id     TEXT,
+              step       INTEGER,
+              layer      TEXT,
+              channel    INTEGER,
+              tensor     TEXT,          
+              timestamp  TEXT,
+              context    TEXT,      
+              PRIMARY KEY (run_id, step, layer, channel)
+            ) WITHOUT ROWID;
+            """
+        )
+        # metric sums
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS metric_sums (
+            metric      TEXT,
+            layer       TEXT,
+            channel     INTEGER,
+            count       INTEGER DEFAULT 0,
+            sum_m       REAL    DEFAULT 0,
+            sum_m2      REAL    DEFAULT 0,
+            sum_xm      REAL    DEFAULT 0,
+            PRIMARY KEY (metric, layer, channel)
+            ) WITHOUT ROWID;
+            """
+        )
+        # stats table
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS stats (
+            layer        TEXT,
+            channel      INTEGER,
+
+            -- running tallies ----------
+            count        INTEGER      DEFAULT 0,
+            sum_x        REAL         DEFAULT 0,   -- Σ x
+            sum_x2       REAL         DEFAULT 0,   -- Σ x²
+            sum_m        REAL         DEFAULT 0,   -- Σ m
+            sum_m2       REAL         DEFAULT 0,   -- Σ m²
+            sum_xm       REAL         DEFAULT 0,   -- Σ x m
+
+            -- derived moments ----------
+            mean         REAL,
+            std          REAL,
+            min          REAL,
+            max          REAL,
+
+            correlations TEXT,
+            last_updated TEXT,
+            PRIMARY KEY (layer, channel)
+            ) WITHOUT ROWID;
+            """
+        )
+        # explanations table (multiple versions per channel)
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS explanations (
+              layer      TEXT,
+              channel    INTEGER,
+              version    INTEGER,
+              text       TEXT,
+              source     TEXT,
+              created_at TEXT,
+              PRIMARY KEY (layer, channel, version)
+            );
+            """
+        )
+        # artifacts table
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS artifacts (
+              artifact_id TEXT PRIMARY KEY,
+              kind        TEXT,
+              path        TEXT,
+              meta        TEXT,
+              created_at  TEXT
+            );
+            """
+        )
+        # FTS5 virtual table for explanation text search (if available)
+        try:
+            cur.execute(
+                """
+                CREATE VIRTUAL TABLE IF NOT EXISTS explanations_fts USING fts5(
+                  text, layer UNINDEXED, channel UNINDEXED, version UNINDEXED,
+                  content='explanations', content_rowid='rowid');
+                """
+            )
+            # populate if fresh DB
+            cur.execute(
+                "INSERT INTO explanations_fts(rowid, text) SELECT rowid, text FROM explanations WHERE rowid NOT IN (SELECT rowid FROM explanations_fts);"
+            )
+        except sqlite3.OperationalError:
+            # SQLite built without FTS5—fallback later with LIKE search
+            pass
+
+        self._conn.commit()
+
+    # ------------------------------------------------------------------
+    # Lifecycle ----------------------------------------------------------
+    # ------------------------------------------------------------------
+
+    def close(self):
+        self._conn.commit()
+        self._conn.close()
+
+    # ------------------------------------------------------------------
+    # Write methods ------------------------------------------------------
+    # ------------------------------------------------------------------
+
+    def write_event(self, ev: ActivationEvent) -> None:
+        cur = self._conn.cursor()
+        metrics: dict[str, float] = ev.context.get("metrics", {})
+        if metrics:                       # skip fast path if none
+            sum_x  = ev.value_sum or sum(ev.tensor)
+            sum_x2 = ev.value_sq_sum or sum(v*v for v in ev.tensor)
+            for name, m in metrics.items():
+                m = float(m)
+                cur.execute(
+                    """
+                    INSERT INTO metric_sums (metric, layer, channel,
+                                            count, sum_m, sum_m2, sum_xm)
+                    VALUES (?, ?, ?, 1, ?, ?, ?)
+                    ON CONFLICT(metric, layer, channel) DO UPDATE SET
+                    count  = count  + 1,
+                    sum_m  = sum_m  + EXCLUDED.sum_m,
+                    sum_m2 = sum_m2 + EXCLUDED.sum_m2,
+                    sum_xm = sum_xm + EXCLUDED.sum_xm
+                    """,
+                    (
+                        name, ev.layer, ev.channel,
+                        m,            # Σ m
+                        m * m,        # Σ m²
+                        sum_x * m,    # Σ x m
+                    ),
+                )
+                cur.execute(
+                    """
+                    INSERT INTO stats (layer, channel, count, sum_x, sum_x2)
+                    VALUES (?, ?, 1, ?, ?)
+                    ON CONFLICT(layer, channel) DO UPDATE SET
+                    count  = count  + 1,
+                    sum_x  = sum_x  + EXCLUDED.sum_x,
+                    sum_x2 = sum_x2 + EXCLUDED.sum_x2
+                    """,
+                    (ev.layer, ev.channel, sum_x, sum_x2),
+                )                        
+        cur.execute(
+            """
+            INSERT OR REPLACE INTO activations
+            (run_id, step, layer, channel, tensor, timestamp, context)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                ev.run_id,
+                ev.step,
+                ev.layer,
+                ev.channel,
+                json.dumps(ev.tensor),
+                ev.timestamp,
+                json.dumps(ev.context),
+            ),
+        )
+        self._conn.commit()
+
+    def write_statblock(self, sb: StatBlock) -> None:
+        cur = self._conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO stats (layer, channel, count, mean, std, min, max, correlations, last_updated)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(layer, channel) DO UPDATE SET
+              count=excluded.count,
+              mean=excluded.mean,
+              std =excluded.std,
+              min =excluded.min,
+              max =excluded.max,
+              correlations=excluded.correlations,
+              last_updated=excluded.last_updated;
+            """,
+            (
+                sb.layer,
+                sb.channel,
+                sb.count,
+                sb.mean,
+                sb.std,
+                sb.min,
+                sb.max,
+                json.dumps(sb.top_correlations),
+                sb.last_updated,
+            ),
+        )
+        self._conn.commit()
+
+    def write_explanation(self, ex: Explanation) -> None:
+        cur = self._conn.cursor()
+        # get next version if exists
+        cur.execute(
+            "SELECT COALESCE(MAX(version), 0) FROM explanations WHERE layer=? AND channel=?",
+            (ex.layer, ex.channel),
+        )
+        next_ver = cur.fetchone()["COALESCE(MAX(version), 0)"] + 1 if ex.version == 1 else ex.version
+        cur.execute(
+            """
+            INSERT INTO explanations (layer, channel, version, text, source, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                ex.layer,
+                ex.channel,
+                next_ver,
+                ex.text,
+                ex.source,
+                ex.created_at,
+            ),
+        )
+        # maintain FTS mirror if exists
+        try:
+            cur.execute("INSERT INTO explanations_fts(rowid, text) VALUES (last_insert_rowid(), ?)", (ex.text,))
+        except sqlite3.OperationalError:
+            pass
+        self._conn.commit()
+
+    def write_artifact(self, art: Artifact) -> None:
+        self._conn.execute(
+            """
+            INSERT INTO artifacts (artifact_id, kind, path, meta, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                art.artifact_id,
+                art.kind,
+                art.path,
+                json.dumps(dict(art.meta)),
+                art.created_at,
+            ),
+        )
+        self._conn.commit()
+
+    # ------------------------------------------------------------------
+    # Read / query -------------------------------------------------------
+    # ------------------------------------------------------------------
+
+    def fetch_events(
+        self,
+        layer: str,
+        channel: int,
+        t0: float | None = None,
+        t1: float | None = None,
+        downsample: int = 1,
+    ) -> Sequence[float]:
+        cur = self._conn.cursor()
+        sql = ["SELECT tensor FROM activations WHERE layer=? AND channel=?"]
+        params: list = [layer, channel]
+        if t0 is not None:
+            sql.append("AND step >= ?")
+            params.append(int(t0))
+        if t1 is not None:
+            sql.append("AND step <= ?")
+            params.append(int(t1))
+        sql.append("ORDER BY step")
+        cur.execute(" ".join(sql), params)
+        rows = cur.fetchall()
+        if not rows:
+            return []
+        # downsample by stride
+        selected = rows[::downsample] if downsample > 1 else rows
+        # flatten JSON arrays
+        out: list[float] = []
+        for r in selected:
+            out.extend(json.loads(r["tensor"]))
+        return out
+
+    def fetch_explanation(self, layer: str, channel: int) -> Explanation | None:
+        cur = self._conn.cursor()
+        cur.execute(
+            "SELECT * FROM explanations WHERE layer=? AND channel=? ORDER BY version DESC LIMIT 1",
+            (layer, channel),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        return Explanation(
+            layer=row["layer"],
+            channel=row["channel"],
+            version=row["version"],
+            text=row["text"],
+            source=row["source"],
+            created_at=row["created_at"],
+        )
+    
+
+    def unexplained(self, overwrite: bool) -> Iterable[StatBlock]:
+        cur = self._conn.cursor()
+        if overwrite:
+            cur.execute("SELECT * FROM stats")
+        else:
+            cur.execute(
+                """
+                SELECT s.* FROM stats s
+                LEFT JOIN explanations e ON s.layer=e.layer AND s.channel=e.channel
+                WHERE e.rowid IS NULL
+                """
+            )
+        for row in cur.fetchall():
+            yield StatBlock(
+                layer=row["layer"],
+                channel=row["channel"],
+                count=row["count"],
+                mean=row["mean"],
+                std=row["std"],
+                min=row["min"],
+                max=row["max"],
+                top_correlations=json.loads(row["correlations"] or "[]"),
+                last_updated=row["last_updated"],
+            )
+
+    def iter_statblocks(self, layer=None, channel=None):
+        cur = self._conn.cursor()
+        query = "SELECT layer, channel, count, mean, std, min, max, correlations, last_updated FROM stats"
+        params = []
+        if layer is not None:
+            query += " WHERE layer = ?"
+            params.append(layer)
+            if channel is not None:
+                query += " AND channel = ?"
+                params.append(channel)
+        elif channel is not None:
+            query += " WHERE channel = ?"
+            params.append(channel)
+
+        print(query, params)
+        cur.execute(query, params)
+
+        for row in cur.fetchall():
+            print("row:", row)
+            print(row["count"])
+            yield StatBlock(
+                layer=row["layer"],
+                channel=row["channel"],
+                count=row["count"],
+                mean=row["mean"],
+                std=row["std"],
+                min=row["min"],
+                max=row["max"],
+                top_correlations=json.loads(row["correlations"] or "[]"),
+                last_updated=row["last_updated"],
+            )
+
+    # ------------------------------------------------------------------
+    # Stats computation --------------------------------------------------
+    # ------------------------------------------------------------------
+
+    def compute_stats(self, *, min_count: int = 1) -> None:
+        """
+        Aggregate per-(layer, channel) statistics and write them back into `stats`.
+        Parameters
+        ----------
+        min_count:
+            Skip channels with fewer than this many samples.
+        """
+        cur = self._conn.cursor()
+
+        # Pull every (layer, channel) with at least min_count rows
+        cur.execute(
+            """
+            SELECT layer, channel, COUNT(*)
+            FROM activations
+            GROUP BY layer, channel
+            HAVING COUNT(*) >= ?
+            """,
+            (min_count,),
+        )
+        targets = cur.fetchall()
+
+        print("targets:", targets)
+
+        for row in targets:
+            layer   = row["layer"]
+            channel = row["channel"]
+            count   = row["COUNT(*)"]
+
+            # Fetch tensors for this (layer, channel)
+            cur.execute(
+                """
+                SELECT tensor
+                FROM activations
+                WHERE layer = ? AND channel = ?
+                """,
+                (layer, channel),
+            )
+
+            tensors = cur.fetchall()
+
+            flat: list[float] = []
+            for tensor_dict in tensors:
+                data = json.loads(tensor_dict["tensor"])
+                flat.extend(data)
+
+            if not flat:
+                continue  # nothing numeric, skip
+
+            sb = StatBlock.from_array(layer, channel, flat)
+            print(sb)
+
+            cur.execute(
+                """
+                INSERT INTO stats (layer, channel, count, mean, std, min, max,
+                                sum_x, sum_x2, correlations)
+                VALUES (?,?,?,?,?,?,?)
+                ON CONFLICT(layer, channel) DO UPDATE SET
+                    count       = excluded.count,
+                    mean        = excluded.mean,
+                    std         = excluded.var,
+                    min         = excluded.min,
+                    max         = excluded.max,
+                """,
+                (
+                    sb.layer, sb.channel, sb.count, sb.mean, sb.std,
+                    sb.min, sb.max, json.dumps([]),
+                ),
+            )
+
+        cur.execute("SELECT DISTINCT metric FROM metric_sums")
+        all_metrics = [row["metric"] for row in cur.fetchall()]
+
+        for row in cur.execute("SELECT * FROM stats WHERE count >= ?", (min_count,)):
+            layer, ch, N = row["layer"], row["channel"], row["count"]
+
+            print(row)
+
+            mu_x  = row["sum_x"] / N
+            var_x = row["sum_x2"] / N - mu_x**2
+            sigma_x = var_x ** 0.5 if var_x > 1e-12 else 0.0
+
+            print("stats", mu_x, var_x, sigma_x)
+
+            corrs = []
+            for metric in all_metrics:
+                print(metric)
+                ms = cur.execute(
+                    "SELECT count, sum_m, sum_m2, sum_xm FROM metric_sums "
+                    "WHERE metric=? AND layer=? AND channel=?",
+                    (metric, layer, ch)
+                ).fetchone()
+                if not ms or ms["count"] < min_count or sigma_x == 0:
+                    continue
+
+                mu_m  = ms["sum_m"] / ms["count"]
+                var_m = ms["sum_m2"] / ms["count"] - mu_m**2
+                sigma_m = var_m ** 0.5
+                if sigma_m < 1e-12:
+                    continue
+
+                rho = (ms["sum_xm"] / ms["count"] - mu_x * mu_m) / (sigma_x * sigma_m)
+                print("rho", rho)
+                corrs.append((metric, float(rho)))
+               
+
+            corrs.sort(key=lambda p: abs(p[1]), reverse=True)
+            cur.execute(
+                "UPDATE stats SET correlations=? WHERE layer=? AND channel=?",
+                (json.dumps(corrs[:5]), layer, ch),
+            )
+        self._conn.commit()
+
+    # ------------------------------------------------------------------
+    # Search -------------------------------------------------------------
+    # ------------------------------------------------------------------
+
+    def search_explanations(self, query: str, k: int = 10) -> List[Explanation]:
+        cur = self._conn.cursor()
+        rows: list
+        try:
+            cur.execute(
+                "SELECT layer, channel, version, text, source, created_at FROM explanations_fts WHERE explanations_fts MATCH ? LIMIT ?",
+                (query, k),
+            )
+            rows = cur.fetchall()
+        except sqlite3.OperationalError:
+            # fallback using LIKE
+            like_q = f"%{query}%"
+            cur.execute(
+                "SELECT layer, channel, version, text, source, created_at FROM explanations WHERE text LIKE ? LIMIT ?",
+                (like_q, k),
+            )
+            rows = cur.fetchall()
+
+        return [
+            Explanation(
+                layer=r["layer"],
+                channel=r["channel"],
+                version=r["version"],
+                text=r["text"],
+                source=r["source"],
+                created_at=r["created_at"],
+            )
+            for r in rows
+        ]
+
+    # ------------------------------------------------------------------
+    # House‑keeping ------------------------------------------------------
+    # ------------------------------------------------------------------
+
+    def prune_explanations(self, *, keep_most_recent: int = 3) -> None:
+        cur = self._conn.cursor()
+        cur.execute("SELECT layer, channel, COUNT(*) as cnt FROM explanations GROUP BY layer, channel HAVING cnt > ?", (keep_most_recent,))
+        rows = cur.fetchall()
+        for r in rows:
+            layer, channel = r["layer"], r["channel"]
+            cur.execute(
+                "DELETE FROM explanations WHERE layer=? AND channel=? AND version NOT IN (SELECT version FROM explanations WHERE layer=? AND channel=? ORDER BY version DESC LIMIT ?)",
+                (layer, channel, layer, channel, keep_most_recent),
+            )
+        self._conn.commit()
+
+    def flush(self) -> None:
+        self._conn.commit()
+
+# ======================
+# File: utils/hook_utils.py
+# ======================
+
+def remove_all_hooks(module):
+    """
+    Recursively strip *every* forward / pre-forward / backward hook
+    from `module` and its sub-modules.
+
+    Use only for debugging; live code should track hook handles instead.
+
+    ex. remove_all_hooks(model.policy)
+    """
+    for m in module.modules():          # walk the whole tree
+        for attr in ("_forward_hooks", "_forward_pre_hooks", "_backward_hooks"):
+            d = getattr(m, attr, None)
+            if d:                       # OrderedDict of {id: hook_fn}
+                d.clear()
+
+
+
+# ======================
+# File: utils/logging.py
+# ======================
+
+"""Tiny wrapper around stdlib logging so internal modules can grab a
+consistent logger without repeating boilerplate.
+"""
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+_LOG_FORMAT = "% (asctime)s | %(levelname)s | %(name)s : %(message)s"
+
+logging.basicConfig(format=_LOG_FORMAT, level=logging.INFO)
+
+
+def get_logger(name: str | None = None, **kwargs: Any) -> logging.Logger:  # noqa: D401 – factory
+    """Return a module- or user‑named :class:`logging.Logger`."""
+    return logging.getLogger(name)
+
+
+# ======================
+# File: api/latent_db.py
+# ======================
+
+"""interlatent.api.latent_db
+
+The public façade for interacting with a LatentDB instance.
+It abstracts away storage details, statistics computation, and LLM-driven
+explanations so users can treat a trained neural network like a chatty,
+self‑documenting black box.
+
+Design goals
+------------
+• **Simple import surface** – `from interlatent.api import LatentDB`
+• **Storage‑agnostic** – pluggable back‑end selected from URI scheme.
+• **Async‑friendly** – heavy tasks (stats, descriptions) can run in a
+  background executor but fall back to sync for notebooks.
+• **Typed** – Pydantic schemas enforce contract integrity across
+  modules.
+"""
+from __future__ import annotations
+
+import json
+import importlib
+import inspect
+import textwrap
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from typing import Any, Iterable, Optional, Sequence
+
+from pydantic import ValidationError
+
+# Local imports — these modules live elsewhere in the repo; circular
+# dependency risks are mitigated by importing lazily where needed.
+from ..schema import ActivationEvent, Explanation, StatBlock  # type: ignore
+from ..storage.base import StorageBackend  # type: ignore
+from ..utils.logging import get_logger  # type: ignore
+
+_LOG = get_logger(__name__)
+
+# ---------------------------------------------------------------------------
+# Helper: backend dispatcher -------------------------------------------------
+# ---------------------------------------------------------------------------
+
+
+_SCHEME_TO_BACKEND = {
+    "sqlite": "..storage.sqlite:SQLiteBackend",
+    "file": "..storage.sqlite:SQLiteBackend",  # alias
+    "dynamodb": "..storage.dynamo:DynamoBackend",
+}
+
+
+def _resolve_backend(uri: str) -> StorageBackend:  # pragma: no cover
+    """Instantiate a :class:`StorageBackend` based on the URI scheme.
+
+    Parameters
+    ----------
+    uri:
+        e.g. ``"sqlite:///my_runs/latents.db"`` or
+        ``"dynamodb://latentdb-prod"``.
+    """
+    scheme = uri.split(":", 1)[0]
+    dotted = _SCHEME_TO_BACKEND.get(scheme)
+    if dotted is None:
+        raise ValueError(f"Unknown storage scheme '{scheme}'. Registered: {list(_SCHEME_TO_BACKEND)}")
+
+    mod_path, _, cls_name = dotted.partition(":")
+    module = importlib.import_module(mod_path, package=__package__)
+    backend_cls: type[StorageBackend] = getattr(module, cls_name)
+    return backend_cls(uri)
+
+
+# ---------------------------------------------------------------------------
+# LatentDB facade ------------------------------------------------------------
+# ---------------------------------------------------------------------------
+
+
+class LatentDB:
+    """High‑level object users interact with.
+
+    Notes
+    -----
+    • Thread‑safe for independent short methods. Heavy compute is offloaded to
+      an internal :class:`ThreadPoolExecutor` so notebooks remain snappy.
+    • All public APIs raise *only* `ValueError`, `RuntimeError`, or
+      `KeyError`—the rest are considered bugs.
+    """
+
+    _executor: ThreadPoolExecutor
+
+    # ---------------------------------------------------------------------
+    # Construction & lifecycle -------------------------------------------
+    # ---------------------------------------------------------------------
+
+    def __init__(self, uri: str | Path, *, max_workers: int | None = 4):
+        self._uri = str(uri)
+        self._store: StorageBackend = _resolve_backend(self._uri)
+        self._executor = ThreadPoolExecutor(max_workers=max_workers)
+        _LOG.info("LatentDB initialised with %s", uri)
+
+    # ----------------------- context‑manager sugar -----------------------
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):  # noqa: D401
+        self.close()
+
+    def close(self):
+        """Release underlying resources synchronously."""
+        self._executor.shutdown(wait=True)
+        self._store.close()
+
+    # ---------------------------------------------------------------------
+    # Write path -----------------------------------------------------------
+    # ---------------------------------------------------------------------
+
+    def write_event(self, event: ActivationEvent) -> None:
+        """Persist a single activation event.
+
+        *Heavy JSON validation* happens here so downstream analysis can
+        trust the schema.
+        """
+        try:
+            event = ActivationEvent.parse_obj(event)  # idempotent if already validated
+        except ValidationError as e:  # pragma: no cover
+            raise ValueError(f"Invalid ActivationEvent: {e}") from None
+        self._store.write_event(event)
+
+    # ---------------------------------------------------------------------
+    # Analysis -------------------------------------------------------------
+    # ---------------------------------------------------------------------
+
+    def compute_stats(self, *, min_count: int = 1, workers: int | None = None) -> None:
+        """Compute/update :class:`StatBlock`s for all stored channels.
+
+        This method *blocks* by default. For long‑running datasets you may
+        pass ``workers=0`` and call :py:meth:`await_stats` later.
+        """
+        fut = self._executor.submit(
+            self._store.compute_stats,
+            min_count=min_count,        # ← pass as keyword
+        )
+        if workers is None or workers > 0:
+            fut.result()
+
+    def await_stats(self):
+        """Convenience helper that blocks until all queued stat jobs finish."""
+        self._executor.shutdown(wait=True)
+        self._executor = ThreadPoolExecutor(max_workers=1)
+
+    # ---------------------------------------------------------------------
+    # LLM explanations -----------------------------------------------------
+    # ---------------------------------------------------------------------
+
+    def autodescribe(self, *, llm: str = "openai", overwrite: bool = False, **kwargs: Any) -> None:
+        """Generate or refresh textual explanations for channels without one.
+
+        Parameters
+        ----------
+        llm:
+            Backend identifier, e.g. ``"openai"`` or ``"local"``.
+        overwrite:
+            If ``True``, regenerate even if an explanation string exists.
+        kwargs:
+            Extra kwargs forwarded to the LLM backend (e.g. ``model="gpt-4o"``).
+        """
+        from ..explain import load_backend  # local import to avoid cycles
+
+        backend = load_backend(llm, **kwargs)
+        missing: list[StatBlock] = list(self._store.unexplained(overwrite))
+        _LOG.info("Generating %d explanations via %s", len(missing), llm)
+
+        for sb in missing:
+            prompt = self._explain_prompt(sb)
+            text = backend(prompt)
+            self._store.write_explanation(Explanation.from_statblock(sb, text))
+
+    # -- helper ------------------------------------------------------------
+    @staticmethod
+    def _explain_prompt(sb: StatBlock) -> str:
+        template = textwrap.dedent(
+            """
+            You are analysing a neural‑network latent channel. Here are its
+            summary statistics and correlations. Respond with a *concise*,
+            lay‑readable blurb about what this channel detects.
+
+            LAYER   : {layer}
+            CHANNEL : {channel}
+            MEAN    : {mean:.4f}
+            STD     : {std:.4f}
+            TOP‑CORR: {correlations}
+            """
+        )
+        return template.format(
+            layer=sb.layer,
+            channel=sb.channel,
+            mean=sb.mean,
+            std=sb.std,
+            correlations=sb.top_correlations[:5],
+        )
+
+    # ---------------------------------------------------------------------
+    # Querying -------------------------------------------------------------
+    # ---------------------------------------------------------------------
+
+    def fetch_activations(
+        self,
+        *,
+        layer: str,
+        limit: int | None = None,
+    ) -> list[ActivationEvent]:
+        """
+        Return ActivationEvent rows for *all channels* of the given layer,
+        ordered by (step, channel).  Used by training datasets.
+
+        Parameters
+        ----------
+        layer : str
+            Layer name to pull.
+        limit : int | None
+            Optional hard cap on number of samples (per channel) for quick
+            experiments.
+        """
+        cur = self._store._conn.cursor()          # safe: read-only
+        sql = (
+            "SELECT run_id, step, layer, channel, tensor, context "
+            "FROM activations WHERE layer = ? "
+            "ORDER BY step, channel"
+        )
+        params = [layer]
+        if limit:
+            sql += " LIMIT ?"
+            params.append(limit)
+
+        rows = cur.execute(sql, params).fetchall()
+        return [
+            ActivationEvent(
+                run_id=r["run_id"],
+                step=r["step"],
+                layer=r["layer"],
+                channel=r["channel"],
+                tensor=json.loads(r["tensor"]),
+                context=json.loads(r["context"]) if r["context"] else {},
+            )
+            for r in rows
+        ]
+    
+    def describe(self, layer: str, channel: int, *, as_dict: bool = False) -> str | dict[str, Any]:
+        """Return the human‑readable description for a latent channel."""
+        expl = self._store.fetch_explanation(layer, channel)
+        if expl is None:
+            raise KeyError(f"No explanation for {layer}:{channel}")
+        return expl.dict() if as_dict else expl.text
+
+    def timeline(
+        self,
+        layer: str,
+        channel: int,
+        *,
+        t0: float | None = None,
+        t1: float | None = None,
+        downsample: int = 1,
+        as_array: bool = True,
+    ) -> Any:
+        """Return raw activation time‑series (optionally down‑sampled)."""
+        events = self._store.fetch_events(layer, channel, t0, t1, downsample)
+        return events if as_array else events.tolist()
+
+    # ---------------------------------------------------------------------
+    # Chat‑style free‑text QA ---------------------------------------------
+    # ---------------------------------------------------------------------
+
+    def chat(self, prompt: str, *, llm: str = "openai", **kwargs: Any) -> str:
+        """Answer an arbitrary question about stored activations.
+
+        For now this is a thin wrapper that stuffs the entire prompt and
+        perhaps some retrieved docs into an LLM. Future versions may use a
+        proper RAG setup.
+        """
+        from ..explain import load_backend  # local import to avoid cycles
+
+        # naive retrieval: top‑k explanations whose text matches any word
+        # in the prompt. Replace with vector search later.
+        docs = self._store.search_explanations(prompt, k=20)
+        context = "\n\n".join(d.text for d in docs)
+        meta = f"Context docs (k={len(docs)}). Answer the user question concisely."
+        full_prompt = f"{meta}\n\n{context}\n\nQuestion: {prompt}\nAnswer:"
+
+        backend = load_backend(llm, **kwargs)
+        return backend(full_prompt)
+
+    # ---------------------------------------------------------------------
+    # Maintenance helpers --------------------------------------------------
+    # ---------------------------------------------------------------------
+
+    def prune_explanations(self, *, keep_most_recent: int = 3):
+        """Drop old explanation drafts, keeping only the newest *n* per channel."""
+        self._store.prune_explanations(keep_most_recent)
+
+    def find_dead(self, *, threshold: float = 1e-3) -> list[tuple[str, int]]:
+        """Return channels whose mean absolute activation < *threshold*."""
+        return [
+            (sb.layer, sb.channel)
+            for sb in self._store.iter_statblocks()
+            if abs(sb.mean) < threshold
+        ]
+    
+    def iter_statblocks(
+        self,
+        layer: str | None = None,
+        channel: int | None = None,
+    ) -> Iterable[StatBlock]:
+        """Yield StatBlocks, optionally filtered by layer / channel."""
+        yield from self._store.iter_statblocks(layer=layer, channel=channel)
+
+    def flush(self) -> None:
+        """Persist any buffered events immediately."""
+        self._store.flush()
+
+    # ---------------------------------------------------------------------
+    # Magic methods --------------------------------------------------------
+    # ---------------------------------------------------------------------
+
+    def __repr__(self) -> str:  # pragma: no cover
+        sig = inspect.signature(self.__class__)
+        params = ", ".join(f"{p}={getattr(self, p)}" for p in sig.parameters if hasattr(self, p))
+        return f"<{self.__class__.__name__} {params}>"
+
+
+# ======================
+# File: api/__init__.py
+# ======================
+
+# interlatent/api/__init__.py
+from .latent_db import LatentDB
+
+__all__ = ["LatentDB"]
+
+
+# ======================
+# File: models/linear_transcoder.py
+# ======================
+
+import torch.nn as nn
+import torch.nn.functional as F
+
+class LinearTranscoder(nn.Module)
+    def __init__(self, in_dim: int, out_dim: int, latent_dim: int = 16):
+        super().__init__()
+        self.encoder = nn.Linear(in_dim,  latent_dim, bias=False)
+        self.decoder = nn.Linear(latent_dim, out_dim,  bias=False)
+
+    def forward(self, x):
+        z   = F.relu(self.encoder(x))        # latent bottleneck
+        out = self.decoder(z)
+        return z, out

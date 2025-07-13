@@ -23,6 +23,8 @@ class TranscoderPipeline:
         trainer.train(loader, epochs=self.epochs)
         self._write_latents(trainer.T, ds)
 
+        return trainer
+
     def _write_latents(self, encoder, dataset):
         latent_layer = f"latent:{self.layer}"
         print("latent_layer:", latent_layer)

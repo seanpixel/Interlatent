@@ -475,6 +475,28 @@ class SQLiteBackend(StorageBackend):
 
             sb = StatBlock.from_array(layer, channel, flat)
             print(sb)
+            sum_x  = float(sum(flat))
+            sum_x2 = float(sum(v * v for v in flat))
+
+            cur.execute(
+                """
+                INSERT INTO stats (layer, channel, count, mean, std, min, max,
+                                sum_x, sum_x2, correlations, last_updated)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(layer, channel) DO UPDATE SET
+                    count       = excluded.count,
+                    mean        = excluded.mean,
+                    std         = excluded.std,
+                    min         = excluded.min,
+                    max         = excluded.max,
+                    correlations = excluded.correlations,
+                    last_updated = excluded.last_updated
+                """,
+                (
+                    sb.layer, sb.channel, sb.count, sum_x, sum_x2, sb.mean, sb.std,
+                    sb.min, sb.max, json.dumps([]), sb.last_updated
+                ),
+            )
 
         cur.execute("SELECT DISTINCT metric FROM metric_sums")
         all_metrics = [row["metric"] for row in cur.fetchall()]

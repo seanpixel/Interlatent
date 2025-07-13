@@ -39,8 +39,9 @@ def test_latent_correlations():
     TranscoderPipeline(db, "mlp_extractor.policy_net.0", k=latent_n, epochs=3).run()
     db.compute_stats(min_count=1)
 
+    latents = []
     for ch in range(0, latent_n):
-        latents = list(db.iter_statblocks(layer="latent:mlp_extractor.policy_net.0", channel=ch))
+        latents.append(db.iter_statblocks(layer="latent:mlp_extractor.policy_net.0", channel=ch))
     print("latents:", latents)
     assert any(abs(rho) > 0.7 for sb in latents for _, rho in sb.top_correlations)
 
