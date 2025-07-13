@@ -493,8 +493,8 @@ class SQLiteBackend(StorageBackend):
                     last_updated = excluded.last_updated
                 """,
                 (
-                    sb.layer, sb.channel, sb.count, sum_x, sum_x2, sb.mean, sb.std,
-                    sb.min, sb.max, json.dumps([]), sb.last_updated
+                    sb.layer, sb.channel, sb.count, sb.mean, sb.std,
+                    sb.min, sb.max, sum_x, sum_x2, json.dumps([]), sb.last_updated
                 ),
             )
 
@@ -513,13 +513,18 @@ class SQLiteBackend(StorageBackend):
             print("stats", mu_x, var_x, sigma_x)
 
             corrs = []
+
+            # New cursor to avoid duplication
+            cur2 = self._conn.cursor()
+
             for metric in all_metrics:
                 print(metric)
-                ms = cur.execute(
+                ms = cur2.execute(
                     "SELECT count, sum_m, sum_m2, sum_xm FROM metric_sums "
                     "WHERE metric=? AND layer=? AND channel=?",
                     (metric, layer, ch)
                 ).fetchone()
+                
                 if not ms or ms["count"] < min_count or sigma_x == 0:
                     continue
 
@@ -535,7 +540,7 @@ class SQLiteBackend(StorageBackend):
                
 
             corrs.sort(key=lambda p: abs(p[1]), reverse=True)
-            cur.execute(
+            cur2.execute(
                 "UPDATE stats SET correlations=? WHERE layer=? AND channel=?",
                 (json.dumps(corrs[:5]), layer, ch),
             )

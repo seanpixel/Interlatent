@@ -16,7 +16,7 @@ Tables & Lineage
 from __future__ import annotations
 
 import datetime as _dt
-import uuid as _uuid
+import uuid as _uuid_mod
 from typing import Any, Dict, List, Mapping, Sequence, Tuple
 
 import numpy as np
@@ -32,7 +32,7 @@ def _now() -> str:
 
 
 def _uuid() -> str:  # noqa: D401 – function not method
-    return _uuid.uuid4().hex
+    return _uuid_mod.uuid4().hex
 
 
 # ---------------------------------------------------------------------------

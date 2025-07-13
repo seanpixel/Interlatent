@@ -226,7 +226,7 @@ class PrePostHookCtx:
                 layer=layer_tag,
                 channel=channel,
                 tensor=[float(val)],
-                context=ctx.get("metrics", {}),
+                context=ctx,
                 value_sum=float(val),
                 value_sq_sum=float(val * val),
             )
