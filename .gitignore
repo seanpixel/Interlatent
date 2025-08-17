@@ -44,4 +44,4 @@ pretrained
 artifacts
 
 # database
-./runs
+runs/
