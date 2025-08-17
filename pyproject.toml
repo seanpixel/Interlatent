@@ -5,7 +5,7 @@ dependencies = []
 
 [project.optional-dependencies]
 dev = [
-  "torch==2.2.2+cpu ; platform_machine != 'arm64'",
+  "torch==2.2.2 ; platform_machine != 'arm64'",
   "gymnasium",
   "pytest",
 ]

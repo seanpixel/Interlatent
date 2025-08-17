@@ -1,0 +1,28 @@
+name: interlatent
+channels:
+  - pytorch
+  - nvidia
+  - defaults
+dependencies:
+  - python=3.11
+  - pip
+  # --- Core ML stack ---
+  # For GPU (comment out if you want CPU only)
+  # - pytorch=2.2.2
+  # - torchvision
+  # - torchaudio
+  # - pytorch-cuda=12.1  # requires NVIDIA drivers >= 525
+  # --- For CPU only ---
+  - pytorch=2.2.2
+  - torchvision
+  - torchaudio
+  - cpuonly
+  # --- Dev tools ---
+  - pip:
+      - stable-baselines3
+      - gymnasium
+      - pytest
+      - pydantic
+      - "-e ."
+      # add any other extras from pyproject.toml here
+      # e.g. black, flake8, jupyter, etc.

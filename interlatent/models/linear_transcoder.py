@@ -1,7 +1,8 @@
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-class LinearTranscoder(nn.Module)
+class LinearTranscoder(nn.Module):
     def __init__(self, in_dim: int, out_dim: int, latent_dim: int = 16):
         super().__init__()
         self.encoder = nn.Linear(in_dim,  latent_dim, bias=False)
