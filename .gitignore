@@ -45,3 +45,6 @@ artifacts
 
 # database
 runs/
+
+# key
+keys/
