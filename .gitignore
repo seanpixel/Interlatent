@@ -42,3 +42,6 @@ tests/**/__pycache__/
 # models (transcoders and pretrained models)
 pretrained
 artifacts
+
+# database
+./runs
