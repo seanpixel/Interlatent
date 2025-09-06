@@ -17,6 +17,9 @@ Interlatent streamlines this process of extracting interpretable features:
 ## Current Progress
 The framework can hook onto given layers of a model to collect activations, train transcoders using those activations, and compute correlations between each feature of the transcoder and any given RL environment metric. Scaling this up in order to test this on bigger models and complex environments require compute. Right now, the repository is a working, but scrappy, framework.
 
+## How to Use
+Check the `/tests` in order to see how to work with the framework. User-facing documentation WIP, API needs work first. 
+
 
 ## Future Plans & Motivations
 Unlike current reasoning language models, RL-trained real-world agents carry out actions without “reasoning traces", which means that we have no idea why the model does what it does and what thoughts it has in mind while performing an action (technically, reasoning traces are black-boxes too but RL is worse). 
