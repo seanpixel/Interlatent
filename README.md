@@ -19,7 +19,7 @@ The framework can hook onto given layers of a model to collect activations, trai
 
 
 ## Future Plans & Motivations
-Unlike current reasoning language models, RL-trained real-world agents carry out actions without “<reasoning-trace>”s, which means that we have no idea why the model does what it does and what thoughts it has in mind while performing an action (technically, reasoning traces are black-boxes too but RL is worse). 
+Unlike current reasoning language models, RL-trained real-world agents carry out actions without “reasoning traces", which means that we have no idea why the model does what it does and what thoughts it has in mind while performing an action (technically, reasoning traces are black-boxes too but RL is worse). 
 
 While carrying out previous experiments interpreting the cartpole agent with transcoders, I noticed myself asking LLMs to decipher latent activations by feeding it information such as correlation with acceleration, position, pole angular velocity etc. Now I ask myself: What if we do this real-time on a more complex environment? What if we can get an explanation of a humanoid agent’s mind asynchronously while they act? 
 
