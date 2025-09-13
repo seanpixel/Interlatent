@@ -145,57 +145,6 @@ class LatentDB:
         self._executor = ThreadPoolExecutor(max_workers=1)
 
     # ---------------------------------------------------------------------
-    # LLM explanations -----------------------------------------------------
-    # ---------------------------------------------------------------------
-
-    def autodescribe(self, *, llm: str = "openai", overwrite: bool = False, **kwargs: Any) -> None:
-        """Generate or refresh textual explanations for channels without one.
-
-        Parameters
-        ----------
-        llm:
-            Backend identifier, e.g. ``"openai"`` or ``"local"``.
-        overwrite:
-            If ``True``, regenerate even if an explanation string exists.
-        kwargs:
-            Extra kwargs forwarded to the LLM backend (e.g. ``model="gpt-4o"``).
-        """
-        from ..explain import load_backend  # local import to avoid cycles
-
-        backend = load_backend(llm, **kwargs)
-        missing: list[StatBlock] = list(self._store.unexplained(overwrite))
-        _LOG.info("Generating %d explanations via %s", len(missing), llm)
-
-        for sb in missing:
-            prompt = self._explain_prompt(sb)
-            text = backend(prompt)
-            self._store.write_explanation(Explanation.from_statblock(sb, text))
-
-    # -- helper ------------------------------------------------------------
-    @staticmethod
-    def _explain_prompt(sb: StatBlock) -> str:
-        template = textwrap.dedent(
-            """
-            You are analysing a neural‑network latent channel. Here are its
-            summary statistics and correlations. Respond with a *concise*,
-            lay‑readable blurb about what this channel detects.
-
-            LAYER   : {layer}
-            CHANNEL : {channel}
-            MEAN    : {mean:.4f}
-            STD     : {std:.4f}
-            TOP‑CORR: {correlations}
-            """
-        )
-        return template.format(
-            layer=sb.layer,
-            channel=sb.channel,
-            mean=sb.mean,
-            std=sb.std,
-            correlations=sb.top_correlations[:5],
-        )
-
-    # ---------------------------------------------------------------------
     # Querying -------------------------------------------------------------
     # ---------------------------------------------------------------------
 
@@ -240,13 +189,7 @@ class LatentDB:
             )
             for r in rows
         ]
-    
-    def describe(self, layer: str, channel: int, *, as_dict: bool = False) -> str | dict[str, Any]:
-        """Return the human‑readable description for a latent channel."""
-        expl = self._store.fetch_explanation(layer, channel)
-        if expl is None:
-            raise KeyError(f"No explanation for {layer}:{channel}")
-        return expl.dict() if as_dict else expl.text
+
 
     def timeline(
         self,
@@ -263,35 +206,8 @@ class LatentDB:
         return events if as_array else events.tolist()
 
     # ---------------------------------------------------------------------
-    # Chat‑style free‑text QA ---------------------------------------------
-    # ---------------------------------------------------------------------
-
-    def chat(self, prompt: str, *, llm: str = "openai", **kwargs: Any) -> str:
-        """Answer an arbitrary question about stored activations.
-
-        For now this is a thin wrapper that stuffs the entire prompt and
-        perhaps some retrieved docs into an LLM. Future versions may use a
-        proper RAG setup.
-        """
-        from ..explain import load_backend  # local import to avoid cycles
-
-        # naive retrieval: top‑k explanations whose text matches any word
-        # in the prompt. Replace with vector search later.
-        docs = self._store.search_explanations(prompt, k=20)
-        context = "\n\n".join(d.text for d in docs)
-        meta = f"Context docs (k={len(docs)}). Answer the user question concisely."
-        full_prompt = f"{meta}\n\n{context}\n\nQuestion: {prompt}\nAnswer:"
-
-        backend = load_backend(llm, **kwargs)
-        return backend(full_prompt)
-
-    # ---------------------------------------------------------------------
     # Maintenance helpers --------------------------------------------------
     # ---------------------------------------------------------------------
-
-    def prune_explanations(self, *, keep_most_recent: int = 3):
-        """Drop old explanation drafts, keeping only the newest *n* per channel."""
-        self._store.prune_explanations(keep_most_recent)
 
     def find_dead(self, *, threshold: float = 1e-3) -> list[tuple[str, int]]:
         """Return channels whose mean absolute activation < *threshold*."""
