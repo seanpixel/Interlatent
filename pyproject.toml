@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "interlatent"
 version = "0.0.0"
@@ -9,3 +13,7 @@ dev = [
   "gymnasium",
   "pytest",
 ]
+
+[tool.setuptools.packages.find]
+include = ["interlatent"]
+exclude = ["tests", "scripts", "runs", "keys", "artifacts", "pretrained"]
