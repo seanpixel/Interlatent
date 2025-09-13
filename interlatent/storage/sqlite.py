@@ -344,24 +344,6 @@ class SQLiteBackend(StorageBackend):
             out.extend(json.loads(r["tensor"]))
         return out
 
-    def fetch_explanation(self, layer: str, channel: int) -> Explanation | None:
-        cur = self._conn.cursor()
-        cur.execute(
-            "SELECT * FROM explanations WHERE layer=? AND channel=? ORDER BY version DESC LIMIT 1",
-            (layer, channel),
-        )
-        row = cur.fetchone()
-        if not row:
-            return None
-        return Explanation(
-            layer=row["layer"],
-            channel=row["channel"],
-            version=row["version"],
-            text=row["text"],
-            source=row["source"],
-            created_at=row["created_at"],
-        )
-    
 
     def unexplained(self, overwrite: bool) -> Iterable[StatBlock]:
         cur = self._conn.cursor()
@@ -547,54 +529,9 @@ class SQLiteBackend(StorageBackend):
         self._conn.commit()
 
     # ------------------------------------------------------------------
-    # Search -------------------------------------------------------------
-    # ------------------------------------------------------------------
-
-    def search_explanations(self, query: str, k: int = 10) -> List[Explanation]:
-        cur = self._conn.cursor()
-        rows: list
-        try:
-            cur.execute(
-                "SELECT layer, channel, version, text, source, created_at FROM explanations_fts WHERE explanations_fts MATCH ? LIMIT ?",
-                (query, k),
-            )
-            rows = cur.fetchall()
-        except sqlite3.OperationalError:
-            # fallback using LIKE
-            like_q = f"%{query}%"
-            cur.execute(
-                "SELECT layer, channel, version, text, source, created_at FROM explanations WHERE text LIKE ? LIMIT ?",
-                (like_q, k),
-            )
-            rows = cur.fetchall()
-
-        return [
-            Explanation(
-                layer=r["layer"],
-                channel=r["channel"],
-                version=r["version"],
-                text=r["text"],
-                source=r["source"],
-                created_at=r["created_at"],
-            )
-            for r in rows
-        ]
-
-    # ------------------------------------------------------------------
     # House‑keeping ------------------------------------------------------
     # ------------------------------------------------------------------
 
-    def prune_explanations(self, *, keep_most_recent: int = 3) -> None:
-        cur = self._conn.cursor()
-        cur.execute("SELECT layer, channel, COUNT(*) as cnt FROM explanations GROUP BY layer, channel HAVING cnt > ?", (keep_most_recent,))
-        rows = cur.fetchall()
-        for r in rows:
-            layer, channel = r["layer"], r["channel"]
-            cur.execute(
-                "DELETE FROM explanations WHERE layer=? AND channel=? AND version NOT IN (SELECT version FROM explanations WHERE layer=? AND channel=? ORDER BY version DESC LIMIT ?)",
-                (layer, channel, layer, channel, keep_most_recent),
-            )
-        self._conn.commit()
 
     def flush(self) -> None:
         self._conn.commit()
