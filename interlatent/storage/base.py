@@ -75,10 +75,6 @@ class StorageBackend(abc.ABC):
         downsample: int = 1,
     ) -> Sequence[float]:  # pragma: no cover
         """Return flattened activation values satisfying the filter."""
-
-    @abc.abstractmethod
-    def fetch_explanation(self, layer: str, channel: int) -> Explanation | None:  # pragma: no cover
-        """Return most‑recent explanation or ``None`` if absent."""
         
     @abc.abstractmethod
     def unexplained(self, overwrite: bool) -> Iterable[StatBlock]:  # pragma: no cover
@@ -97,20 +93,8 @@ class StorageBackend(abc.ABC):
         """Scan activations and store/update :class:`StatBlock`s."""
 
     # ---------------------------------------------------------------------
-    # Search utilities -----------------------------------------------------
-    # ---------------------------------------------------------------------
-
-    @abc.abstractmethod
-    def search_explanations(self, query: str, k: int = 10) -> List[Explanation]:  # pragma: no cover
-        """Naïve full‑text search; back‑ends may override with FTS/vectors."""
-
-    # ---------------------------------------------------------------------
     # House‑keeping --------------------------------------------------------
     # ---------------------------------------------------------------------
-
-    @abc.abstractmethod
-    def prune_explanations(self, *, keep_most_recent: int = 3) -> None:  # pragma: no cover
-        """Drop old explanation versions per channel, keeping *n* newest."""
 
     @abc.abstractmethod
     def iter_statblocks(
