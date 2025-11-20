@@ -23,6 +23,8 @@ dependencies:
       - gymnasium
       - pytest
       - pydantic
+      - transformers
+      - vllm
       - "-e ."
       # add any other extras from pyproject.toml here
       # e.g. black, flake8, jupyter, etc.
