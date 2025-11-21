@@ -30,6 +30,8 @@ def main():
     model_ref: str | Path = model_path if model_path.exists() else raw
 
     tok = AutoTokenizer.from_pretrained(model_ref)
+    if tok.pad_token_id is None and getattr(tok, "eos_token", None):
+        tok.pad_token = tok.eos_token
     model = AutoModelForCausalLM.from_pretrained(model_ref).to(
         "cuda" if torch.cuda.is_available() else "cpu"
     )

@@ -28,6 +28,9 @@ def main():
         raise SystemExit(f"Model directory does not exist: {model_dir}")
 
     tok = AutoTokenizer.from_pretrained(model_dir)
+    if tok.pad_token_id is None and getattr(tok, "eos_token", None):
+        tok.pad_token = tok.eos_token
+
     llm = LLM(model=model_dir)
 
     db = LatentDB("sqlite:///latents_llm_local.db")

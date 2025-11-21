@@ -104,6 +104,13 @@ class VLLMCollector:
         # simple batching over prompts
         for i in range(0, len(prompts), batch_size):
             batch = prompts[i : i + batch_size]
+            # Ensure a pad token exists so batch padding works.
+            if tokenizer.pad_token_id is None:
+                if getattr(tokenizer, "eos_token_id", None) is not None:
+                    tokenizer.pad_token = tokenizer.eos_token
+                else:
+                    raise ValueError("Tokenizer has no pad_token and no eos_token to fall back on.")
+
             enc = tokenizer(batch, return_tensors="pt", padding=True)
             input_ids = enc["input_ids"].to(self.device)
             attn_mask = enc.get("attention_mask")
