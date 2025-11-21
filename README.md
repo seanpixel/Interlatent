@@ -1,24 +1,27 @@
 # Interlatent
-an open-source tool for peeking into RL models using transcoder activations
+An open-source tool for peeking into both RL agents and language models by collecting, storing, and visualizing internal activations.
 
 
 ## Background
-Back in June 2025, I experimented in interpreting simple RL models adopting the [transcoder methodology](https://transformer-circuits.pub/2025/attribution-graphs/methods.html) developed by Anthropic to understand LLMs. Largely inspired by language model interpretability research, my hypothesis was that we can also probe RL agents by tracking how their internal activations affect their behavior (feature extraction) and steer its policy by manipulating its inner workings (intervention). RL environments supply a large pool of signal where we can obtain metrics to correlate with potentially interpretable activations to gain insights such as "feature 4 of layer 2 spike when the Pacman agent approaches a power pellet". I wrote a blog post summarizing [this proof of concept](https://seanpixel.com/interpretable-rl-via-multiscale-transcoders-sparse-bottlenecks-at-2-4-and-8-dimensions) and spent weeks applying it to other more complex RL environments. This repository serves as a tool for replicating this research for any and all models and environments.
+Back in June 2025, I experimented in interpreting simple RL models adopting the [transcoder methodology](https://transformer-circuits.pub/2025/attribution-graphs/methods.html) developed by Anthropic to understand LLMs. Largely inspired by language model interpretability research, my hypothesis was that we can also probe RL agents by tracking how their internal activations affect their behavior (feature extraction) and steer policy by manipulating inner workings (intervention). RL environments supply a large pool of signal where we can obtain metrics to correlate with potentially interpretable activations to gain insights such as "feature 4 of layer 2 spikes when the Pacman agent approaches a power pellet". I wrote a blog post summarizing [this proof of concept](https://seanpixel.com/interpretable-rl-via-multiscale-transcoders-sparse-bottlenecks-at-2-4-and-8-dimensions) and spent weeks applying it to more complex RL environments. This repository serves as a tool for replicating this research for any and all models and environments—and now includes language models for interpretability workflows without RL.
 
 
 ## How it works
-Interlatent streamlines this process of extracting interpretable features:
-1. Allow users to collect activations of specific layers of a model over several rollouts.
-2. Use the activations to train transcoders that bottleneck linear layers of an AI model to produce sparse (not interpretable yet!) features.  
-3. Track and record specific metrics from the RL environment.
-4. Find patterns between the metrics and feature activations of the transcoder to make sparse features interpretable.  
+Interlatent streamlines extracting and inspecting activations:
+1. Collect activations of specific layers from RL policies or HuggingFace LMs over rollouts/prompts, storing them in a SQLite-backed LatentDB.
+2. (Optional) Train transcoders that bottleneck linear layers to produce sparse latent features.
+3. Track and record metrics (RL env rewards, custom signals) to correlate with activations.
+4. Visualize and explore activations: per-token traces, cross-prompt latent views, and quick DB summaries.
 
 
 ## Current Progress
-The framework can hook onto given layers of a model to collect activations, train transcoders using those activations, and compute correlations between each feature of the transcoder and any given RL environment metric. Scaling this up in order to test this on bigger models and complex environments require compute. Right now, the repository is a working, but scrappy, framework.
+The framework can hook onto given layers to collect activations, train transcoders using those activations, and compute correlations between each feature and metrics. It now includes HuggingFace LLM collectors and visualization utilities (per-token plots and cross-prompt latent plots). Scaling up to bigger models/environments will require more compute; this repo is a working but scrappy toolkit.
 
 ## How to Use
-Check the `/tests` in order to see how to work with the framework. User-facing documentation WIP, API needs work first. 
+- RL activations: see `tests/test_end_to_end.py`.
+- LLM activations: run `python tests/llm_1.py` (env `LLM_MODEL` overrides the default HF id) to populate a SQLite DB.
+- Visuals: `python -m interlatent.vis.summary latents_llm.db` for table-style summaries; `python -m interlatent.vis.plot latents_llm.db --layer llm.layer.-1 --channel 0 --prompt-index 0` for per-prompt traces; `--all-prompts` plots a latent across prompts. `tests/vis_demo.py` shows end-to-end collection + plot generation.
+- User-facing documentation is WIP; APIs may change.
 
 
 ## Future Plans & Motivations
