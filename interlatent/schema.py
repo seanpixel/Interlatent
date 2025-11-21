@@ -63,6 +63,10 @@ class ActivationEvent(BaseModel):
     step: int = Field(..., ge=0, description="Timestep or frame index within the run.")
     layer: str = Field(...)
     channel: int = Field(..., ge=0)
+    prompt: str | None = Field(None, description="Source prompt text for this activation slice.")
+    prompt_index: int | None = Field(None, ge=0, description="Index of the prompt within the run/dataset.")
+    token_index: int | None = Field(None, ge=0, description="Token position within the prompt.")
+    token: str | None = Field(None, description="Tokenizer surface form for the token at token_index.")
 
     value_sum: float | None = None
     value_sq_sum: float | None = None

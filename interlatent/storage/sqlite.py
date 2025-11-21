@@ -38,6 +38,15 @@ def _dict_factory(cursor, row):
     return {col[0]: row[idx] for idx, col in enumerate(cursor.description)}
 
 
+def _ensure_column(cur: sqlite3.Cursor, table: str, column_def: str) -> None:
+    """Idempotently add a column to *table* if it is missing."""
+    try:
+        cur.execute(f"ALTER TABLE {table} ADD COLUMN {column_def};")
+    except sqlite3.OperationalError as e:
+        if "duplicate column name" not in str(e):
+            raise
+
+
 # ---------------------------------------------------------------------------
 # SQLiteBackend --------------------------------------------------------------
 # ---------------------------------------------------------------------------
@@ -75,6 +84,10 @@ class SQLiteBackend(StorageBackend):
               step       INTEGER,
               layer      TEXT,
               channel    INTEGER,
+              prompt     TEXT,
+              prompt_index INTEGER,
+              token_index  INTEGER,
+              token      TEXT,
               tensor     TEXT,          
               timestamp  TEXT,
               context    TEXT,      
@@ -82,6 +95,11 @@ class SQLiteBackend(StorageBackend):
             ) WITHOUT ROWID;
             """
         )
+        # Backward‑compatible add of new columns for prompt/token metadata.
+        _ensure_column(cur, "activations", "prompt TEXT")
+        _ensure_column(cur, "activations", "prompt_index INTEGER")
+        _ensure_column(cur, "activations", "token_index INTEGER")
+        _ensure_column(cur, "activations", "token TEXT")
         # metric sums
         cur.execute(
             """
@@ -221,14 +239,18 @@ class SQLiteBackend(StorageBackend):
         cur.execute(
             """
             INSERT OR REPLACE INTO activations
-            (run_id, step, layer, channel, tensor, timestamp, context)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            (run_id, step, layer, channel, prompt, prompt_index, token_index, token, tensor, timestamp, context)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 ev.run_id,
                 ev.step,
                 ev.layer,
                 ev.channel,
+                ev.prompt,
+                ev.prompt_index,
+                ev.token_index,
+                ev.token,
                 json.dumps(ev.tensor),
                 ev.timestamp,
                 json.dumps(ev.context),

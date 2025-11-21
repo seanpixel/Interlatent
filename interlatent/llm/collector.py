@@ -80,7 +80,7 @@ class VLLMCollector:
 
         This unwraps the vLLM object to grab its HF model, performs batched
         forwards with ``output_hidden_states=True``, and writes one
-        ActivationEvent per (layer, channel) with the token-wise activations.
+        ActivationEvent per (layer, channel, prompt, token).
         """
         model = self._unwrap_hf_model(llm)
         if model is None:
@@ -93,6 +93,8 @@ class VLLMCollector:
 
         run_id = uuid.uuid4().hex
         run_info = RunInfo(run_id=run_id, env_name=getattr(model.config, "model_type", "llm"), tags=tags or {})
+
+        event_step = 0  # monotonically increasing step so PK uniqueness holds even with per-token events
 
         # simple batching over prompts
         for i in range(0, len(prompts), batch_size):
@@ -130,6 +132,24 @@ class VLLMCollector:
             if hidden_states is None:
                 raise RuntimeError("Model did not return hidden_states; ensure config.output_hidden_states=True")
 
+            if max_new_tokens > 0 and hasattr(model, "generate") and hasattr(out, "sequences"):
+                seq_tokens = out.sequences
+                attn_mask_full = getattr(out, "attention_mask", None)
+            else:
+                seq_tokens = input_ids
+                attn_mask_full = attn_mask
+
+            if attn_mask_full is None:
+                attn_mask_full = torch.ones_like(seq_tokens, device=seq_tokens.device)
+
+            seq_tokens = seq_tokens.to(self.device)
+            attn_mask_full = attn_mask_full.to(self.device)
+
+            # Pre-decode tokens for readable context; truncate to real lengths later.
+            tokens_decoded = [
+                tokenizer.convert_ids_to_tokens(seq_tokens[b].tolist()) for b in range(seq_tokens.size(0))
+            ]
+
             # hidden_states is a tuple(len = num_layers+1) of tensors (B, seq, hidden)
             for layer_idx in self._resolve_layers(len(hidden_states)):
                 layer_tensor = hidden_states[layer_idx]  # (B, S, H)
@@ -140,28 +160,50 @@ class VLLMCollector:
 
                 layer_name = f"llm.layer.{layer_idx}"
 
-                # One event per hidden dimension; tensor = values across (batch, seq)
-                for ch in range(H):
-                    vals = layer_tensor[:, :, ch].reshape(-1).float().cpu()
-                    ctx = {
-                        "prompt_batch": batch,
-                        "layer_index": layer_idx,
-                        "channel": ch,
-                        "token_count": S,
-                        "batch_offset": i,
-                    }
-                    self.db.write_event(
-                        ActivationEvent(
-                            run_id=run_id,
-                            step=i,  # batch index as step; per-channel differentiation via channel field
-                            layer=layer_name,
-                            channel=ch,
-                            tensor=vals.tolist(),
-                            value_sum=float(vals.sum()),
-                            value_sq_sum=float((vals * vals).sum()),
-                            context=ctx,
-                        )
+                for b_idx, prompt_text in enumerate(batch):
+                    prompt_idx = i + b_idx
+                    prompt_len = min(
+                        int(attn_mask_full[b_idx].sum().item()),
+                        layer_tensor.shape[1],
+                        seq_tokens.shape[1],
                     )
+                    seq_ids = seq_tokens[b_idx][:prompt_len].tolist()
+                    seq_tokens_str = tokens_decoded[b_idx][:prompt_len]
+
+                    for token_idx in range(prompt_len):
+                        token_val = {
+                            "id": seq_ids[token_idx],
+                            "text": seq_tokens_str[token_idx] if token_idx < len(seq_tokens_str) else None,
+                        }
+
+                        for ch in range(H):
+                            val = float(layer_tensor[b_idx, token_idx, ch].item())
+                            ctx = {
+                                "prompt_text": prompt_text,
+                                "token_id": token_val["id"],
+                                "layer_index": layer_idx,
+                                "channel": ch,
+                                "token_index": token_idx,
+                                "prompt_index": prompt_idx,
+                                "batch_offset": i,
+                            }
+                            self.db.write_event(
+                                ActivationEvent(
+                                    run_id=run_id,
+                                    step=event_step,
+                                    layer=layer_name,
+                                    channel=ch,
+                                    prompt=prompt_text,
+                                    prompt_index=prompt_idx,
+                                    token_index=token_idx,
+                                    token=token_val["text"],
+                                    tensor=[val],
+                                    value_sum=val,
+                                    value_sq_sum=val * val,
+                                    context=ctx,
+                                )
+                            )
+                            event_step += 1
 
         self.db.flush()
         _LOG.info("vLLM collection finished: %s (%d prompts)", run_id, len(prompts))
