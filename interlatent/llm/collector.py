@@ -1,14 +1,9 @@
 """interlatent.llm.collector
 
-Collect activations from language models served through vLLM (or the
-underlying HF model) over a dataset of prompts.
+Collect activations from HuggingFace causal LMs over a dataset of prompts.
 
 Notes
 -----
-- vLLM does not currently expose hidden states through its public
-  `LLM.generate` API. We therefore unwrap the underlying HF model and
-  run forward passes with ``output_hidden_states=True`` to obtain
-  per-layer activations.
 - This is geared toward *small* models and small prompt sets. Capturing
   every hidden dimension for long sequences will explode storage; use
   `max_channels` to downsample.
@@ -41,7 +36,7 @@ __all__ = ["VLLMCollector"]
 
 class VLLMCollector:
     """
-    Collect activations from a vLLM-served language model over a list of prompts.
+    Collect activations from a HuggingFace language model over a list of prompts.
 
     Parameters
     ----------
@@ -83,16 +78,12 @@ class VLLMCollector:
         """
         Execute the underlying HF model on *prompts* and persist activations.
 
-        This unwraps the vLLM object to grab its HF model, performs batched
-        forwards with ``output_hidden_states=True``, and writes one
-        ActivationEvent per (layer, channel, prompt, token).
+        Performs batched forwards with ``output_hidden_states=True`` and writes
+        one ActivationEvent per (layer, channel, prompt, token).
         """
         model = self._unwrap_hf_model(llm)
         if model is None:
-            raise ValueError(
-                "Could not locate HuggingFace model inside the provided vLLM object. "
-                "Pass a vLLM LLM created in single-process mode or supply llm.model manually."
-            )
+            raise ValueError("Could not locate a HuggingFace model; pass a PreTrainedModel or a wrapper exposing `.model`.")
 
         model.eval().to(self.device)
 
@@ -226,10 +217,7 @@ class VLLMCollector:
     # ------------------------------------------------------------------
     def _unwrap_hf_model(self, llm):
         """
-        Try a handful of known attribute paths to pull the HF model out of a vLLM LLM.
-
-        Works in single-process CPU/GPU setups; multi-node setups might keep the model
-        in a worker process and are out of scope for now.
+        Normalize *llm* into a HF PreTrainedModel or torch Module with config.
         """
         def _is_hf_model(obj) -> bool:
             if obj is None:
@@ -238,38 +226,16 @@ class VLLMCollector:
                 return True
             return isinstance(obj, torch.nn.Module) and hasattr(obj, "config")
 
-        def _follow(root, path: str):
-            obj = root
-            for attr in path.split("."):
-                if obj is None:
-                    return None
-                obj = getattr(obj, attr, None)
-            return obj
+        # Already a HF model
+        if _is_hf_model(llm):
+            return llm
 
-        # direct attribute
+        # common wrapper: .model
         direct = getattr(llm, "model", None)
         if _is_hf_model(direct):
             return direct
         if _is_hf_model(getattr(direct, "model", None)):
             return direct.model
-
-        # vLLM engine path (0.4+)
-        engine = getattr(llm, "llm_engine", None)
-        try_paths = [
-            "model_executor.driver_worker.model_runner.model",
-            "model_executor.driver_worker.model_runner.driver_model",
-            "model_executor.driver_worker._model_runner.model",
-            "model_executor.driver_worker._model_runner.driver_model",
-            # sometimes the HF model is nested under an extra .model
-            "model_executor.driver_worker.model_runner.model.model",
-        ]
-        for path in try_paths:
-            obj = _follow(engine, path)
-            if _is_hf_model(obj):
-                return obj
-            nested = getattr(obj, "model", None)
-            if _is_hf_model(nested):
-                return nested
 
         # Fallback: shallow search for a torch.nn.Module with config.
         def _search(obj, depth: int = 0, max_depth: int = 3, visited=None):
@@ -291,6 +257,9 @@ class VLLMCollector:
                 "engine",
                 "hf_model",
                 "llm_model",
+                "module",
+                "backbone",
+                "net",
             )
             for attr in candidate_attrs:
                 child = getattr(obj, attr, None)
@@ -299,7 +268,7 @@ class VLLMCollector:
                     return found
             return None
 
-        return _search(engine) or _search(llm)
+        return _search(llm)
 
     def _resolve_layers(self, num_hidden_states: int) -> Iterable[int]:
         """Normalize requested layer indices into valid positions."""
