@@ -74,7 +74,7 @@ def fetch_activations(
         params.append(prompt_index)
     if prompt_like:
         sql.append("AND prompt LIKE ?")
-        params.append(f\"%{prompt_like}%\")
+        params.append(f"%{prompt_like}%")
 
     sql.append("ORDER BY prompt_index, token_index")
     if limit_prompts is not None:
