@@ -45,6 +45,16 @@ def _open_db(uri: str) -> sqlite3.Connection:
     return conn
 
 
+def _pretty_token(tok: str | None) -> str:
+    """Normalize HF tokens for nicer display (strip common space markers)."""
+    if tok is None:
+        return ""
+    out = tok.replace("Ġ", " ").replace("▁", " ")
+    if out.strip() == "":
+        return "␠"
+    return out
+
+
 def fetch_activations(
     db: str,
     *,
@@ -148,6 +158,7 @@ def plot_activation(
         label = f"prompt {p_idx}" if p_idx is not None else "prompt"
         ax.plot(xs, ys, marker="o", color=color, label=label)
         for x, y, tok in zip(xs, ys, tokens):
+            tok = _pretty_token(tok)
             if len(tok) > 12:
                 tok = tok[:11] + "…"
             ax.text(x, y, tok, fontsize=7, rotation=45, ha="right", va="bottom", color=color, alpha=0.7)
@@ -177,15 +188,14 @@ def plot_latent_across_prompts(
     *,
     layer: str,
     channel: int,
-    gap: int = 2,
     max_label_len: int = 32,
     output: str | None = None,
 ):
     """
     Plot a single latent (layer/channel) across *all* prompts.
 
-    X-axis groups tokens by prompt in sequence; labels show the first few words
-    of each prompt. Y-axis is activation value per token.
+    X-axis groups tokens by prompt (one column per prompt); labels show the first
+    few words of each prompt. Y-axis is activation value per token.
     """
     rows = fetch_activations(db, layer=layer, channel=channel)
     if not rows:
@@ -198,14 +208,13 @@ def plot_latent_across_prompts(
     # Stable order by prompt_index (None last)
     ordered = sorted(grouped.items(), key=lambda kv: (kv[0] is None, kv[0] or 0))
 
-    xs_all: list[int] = []
+    xs_all: list[float] = []
     ys_all: list[float] = []
     colors: list[str] = []
     tokens: list[str] = []
     xticks: list[float] = []
     xtick_labels: list[str] = []
 
-    base_x = 0
     palette = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b"]
 
     for idx, (p_idx, lst) in enumerate(ordered):
@@ -214,20 +223,19 @@ def plot_latent_across_prompts(
         prompt_tokens_y = []
         prompt_tokens_str = []
         for r in lst:
-            x = base_x + (r.token_index or 0)
+            x = float(idx)  # same column per prompt
             prompt_tokens_x.append(x)
             prompt_tokens_y.append(r.value)
-            prompt_tokens_str.append(r.token or "")
+            prompt_tokens_str.append(_pretty_token(r.token))
         if not prompt_tokens_x:
             continue
 
-        mid = (prompt_tokens_x[0] + prompt_tokens_x[-1]) / 2
         label = (lst[0].prompt or f"prompt {p_idx}") if lst else f"prompt {p_idx}"
         label = " ".join(label.split()[:6])
         if len(label) > max_label_len:
             label = label[: max_label_len - 1] + "…"
 
-        xticks.append(mid)
+        xticks.append(float(idx))
         xtick_labels.append(label)
 
         color = palette[idx % len(palette)]
@@ -236,15 +244,13 @@ def plot_latent_across_prompts(
         colors.extend([color] * len(prompt_tokens_x))
         tokens.extend(prompt_tokens_str)
 
-        base_x = prompt_tokens_x[-1] + gap
-
     fig, ax = plt.subplots(figsize=(12, 4))
-    ax.scatter(xs_all, ys_all, c=colors, s=20, alpha=0.85)
+    ax.scatter(xs_all, ys_all, c=colors, s=30, alpha=0.85)
 
     for x, y, tok in zip(xs_all, ys_all, tokens):
         if len(tok) > 12:
             tok = tok[:11] + "…"
-        ax.text(x, y, tok, fontsize=7, rotation=45, ha="right", va="bottom", alpha=0.6)
+        ax.text(x + 0.05, y, tok, fontsize=7, rotation=45, ha="left", va="bottom", alpha=0.7)
 
     ax.set_xticks(xticks)
     ax.set_xticklabels(xtick_labels, rotation=25, ha="right")
