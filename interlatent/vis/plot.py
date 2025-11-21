@@ -161,7 +161,7 @@ def plot_activation(
             tok = _pretty_token(tok)
             if len(tok) > 12:
                 tok = tok[:11] + "…"
-            ax.text(x, y, tok, fontsize=7, rotation=45, ha="right", va="bottom", color=color, alpha=0.7)
+            ax.text(x, y, tok, fontsize=7, rotation=0, ha="right", va="bottom", color=color, alpha=0.7)
 
     prompt_text = rows[0].prompt or ""
     if prompt_like:
@@ -250,7 +250,7 @@ def plot_latent_across_prompts(
     for x, y, tok in zip(xs_all, ys_all, tokens):
         if len(tok) > 12:
             tok = tok[:11] + "…"
-        ax.text(x + 0.05, y, tok, fontsize=7, rotation=45, ha="left", va="bottom", alpha=0.7)
+        ax.text(x + 0.05, y, tok, fontsize=7, rotation=0, ha="left", va="bottom", alpha=0.7)
 
     ax.set_xticks(xticks)
     ax.set_xticklabels(xtick_labels, rotation=25, ha="right")
