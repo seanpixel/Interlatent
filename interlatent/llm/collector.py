@@ -29,6 +29,11 @@ try:  # optional dependency
 except ImportError:  # pragma: no cover
     PreTrainedTokenizerBase = object  # type: ignore
 
+try:  # optional dependency
+    from transformers import PreTrainedModel
+except ImportError:  # pragma: no cover
+    PreTrainedModel = None  # type: ignore
+
 _LOG = get_logger(__name__)
 
 __all__ = ["VLLMCollector"]
@@ -219,24 +224,75 @@ class VLLMCollector:
         Works in single-process CPU/GPU setups; multi-node setups might keep the model
         in a worker process and are out of scope for now.
         """
+        def _is_hf_model(obj) -> bool:
+            if obj is None:
+                return False
+            if PreTrainedModel is not None and isinstance(obj, PreTrainedModel):
+                return True
+            return isinstance(obj, torch.nn.Module) and hasattr(obj, "config")
+
+        def _follow(root, path: str):
+            obj = root
+            for attr in path.split("."):
+                if obj is None:
+                    return None
+                obj = getattr(obj, attr, None)
+            return obj
+
         # direct attribute
-        if hasattr(llm, "model"):
-            return llm.model
+        direct = getattr(llm, "model", None)
+        if _is_hf_model(direct):
+            return direct
+        if _is_hf_model(getattr(direct, "model", None)):
+            return direct.model
+
         # vLLM engine path (0.4+)
         engine = getattr(llm, "llm_engine", None)
         try_paths = [
             "model_executor.driver_worker.model_runner.model",
             "model_executor.driver_worker.model_runner.driver_model",
+            "model_executor.driver_worker._model_runner.model",
+            "model_executor.driver_worker._model_runner.driver_model",
+            # sometimes the HF model is nested under an extra .model
+            "model_executor.driver_worker.model_runner.model.model",
         ]
         for path in try_paths:
-            obj = engine
-            for attr in path.split("."):
-                if obj is None:
-                    break
-                obj = getattr(obj, attr, None)
-            if obj is not None:
+            obj = _follow(engine, path)
+            if _is_hf_model(obj):
                 return obj
-        return None
+            nested = getattr(obj, "model", None)
+            if _is_hf_model(nested):
+                return nested
+
+        # Fallback: shallow search for a torch.nn.Module with config.
+        def _search(obj, depth: int = 0, max_depth: int = 3, visited=None):
+            if obj is None or depth > max_depth:
+                return None
+            if visited is None:
+                visited = set()
+            if id(obj) in visited:
+                return None
+            visited.add(id(obj))
+            if _is_hf_model(obj):
+                return obj
+            candidate_attrs = (
+                "model",
+                "model_runner",
+                "driver_model",
+                "_model_runner",
+                "executor",
+                "engine",
+                "hf_model",
+                "llm_model",
+            )
+            for attr in candidate_attrs:
+                child = getattr(obj, attr, None)
+                found = _search(child, depth + 1, max_depth, visited)
+                if found is not None:
+                    return found
+            return None
+
+        return _search(engine) or _search(llm)
 
     def _resolve_layers(self, num_hidden_states: int) -> Iterable[int]:
         """Normalize requested layer indices into valid positions."""
