@@ -19,16 +19,18 @@ from interlatent.llm import VLLMCollector
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Run VLLMCollector directly on a local HF model (no download).")
-    parser.add_argument("model_dir", type=Path, help="Path to local HF model directory.")
+    parser = argparse.ArgumentParser(
+        description="Run VLLMCollector directly on a HF model (local path or hub id)."
+    )
+    parser.add_argument("model_id_or_path", help="HF hub id (e.g., HuggingFaceTB/SmolLM-360M) or local directory.")
     args = parser.parse_args()
 
-    model_dir = args.model_dir.expanduser().resolve()
-    if not model_dir.exists():
-        raise SystemExit(f"Model directory does not exist: {model_dir}")
+    raw = args.model_id_or_path
+    model_path = Path(raw).expanduser()
+    model_ref: str | Path = model_path if model_path.exists() else raw
 
-    tok = AutoTokenizer.from_pretrained(model_dir)
-    model = AutoModelForCausalLM.from_pretrained(model_dir).to(
+    tok = AutoTokenizer.from_pretrained(model_ref)
+    model = AutoModelForCausalLM.from_pretrained(model_ref).to(
         "cuda" if torch.cuda.is_available() else "cpu"
     )
 
