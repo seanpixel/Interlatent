@@ -3,8 +3,8 @@ Lightweight CLI utilities to inspect an Interlatent SQLite database without
 pulling data into pandas. Designed for quick terminal summaries.
 
 Usage:
-  python vis/summary.py sqlite:///latents_llm_local.db
-  python vis/summary.py latents.db --limit 5
+  python -m interlatent.vis.summary sqlite:///latents_llm_local.db
+  python -m interlatent.vis.summary latents.db --limit 5
 """
 from __future__ import annotations
 
@@ -13,10 +13,6 @@ import json
 import os
 import sqlite3
 from typing import List, Sequence, Tuple
-
-# ---------------------------------------------------------------------------#
-# Helpers                                                                    #
-# ---------------------------------------------------------------------------#
 
 
 def _open_db(uri: str) -> sqlite3.Connection:
@@ -64,11 +60,6 @@ def _ascii_bars(items: Sequence[Tuple[str, int]], width: int = 40) -> str:
         bar_len = int(count / max_count * width)
         lines.append(f"{name}: {'█' * bar_len} {count}")
     return "\n".join(lines)
-
-
-# ---------------------------------------------------------------------------#
-# Core summaries                                                             #
-# ---------------------------------------------------------------------------#
 
 
 def summary(conn: sqlite3.Connection) -> str:
@@ -138,11 +129,6 @@ def head(conn: sqlite3.Connection, limit: int = 5) -> str:
 
     headers = ["run_id", "step", "layer", "ch", "p_idx", "t_idx", "token", "value", "timestamp"]
     return _format_table(headers, rows)
-
-
-# ---------------------------------------------------------------------------#
-# CLI                                                                        #
-# ---------------------------------------------------------------------------#
 
 
 def main():

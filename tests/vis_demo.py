@@ -14,7 +14,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from interlatent.api import LatentDB
 from interlatent.llm import VLLMCollector
-from vis.plot import plot_activation
+from interlatent.vis.plot import plot_activation
 
 
 def main():

@@ -5,10 +5,10 @@ This is a lightweight, pyplot-based visualizer geared toward quick interpretabil
 passes on small runs. It reads directly from the `activations` table.
 
 Usage (CLI):
-  python vis/plot.py latents_llm.db --layer llm.layer.-1 --channel 0 --prompt-index 0 --output out.png
+  python -m interlatent.vis.plot latents_llm.db --layer llm.layer.-1 --channel 0 --prompt-index 0 --output out.png
 
 Programmatic:
-  from vis.plot import plot_activation
+  from interlatent.vis.plot import plot_activation
   plot_activation("latents_llm.db", layer="llm.layer.-1", channel=0, prompt_index=0)
 """
 from __future__ import annotations
@@ -22,11 +22,6 @@ from pathlib import Path
 from typing import Iterable, List, Optional
 
 import matplotlib.pyplot as plt
-
-
-# ---------------------------------------------------------------------------#
-# Data access                                                                #
-# ---------------------------------------------------------------------------#
 
 
 @dataclass
@@ -79,7 +74,7 @@ def fetch_activations(
         params.append(prompt_index)
     if prompt_like:
         sql.append("AND prompt LIKE ?")
-        params.append(f"%{prompt_like}%")
+        params.append(f\"%{prompt_like}%\")
 
     sql.append("ORDER BY prompt_index, token_index")
     if limit_prompts is not None:
@@ -106,11 +101,6 @@ def fetch_activations(
             )
         )
     return rows
-
-
-# ---------------------------------------------------------------------------#
-# Plotting                                                                   #
-# ---------------------------------------------------------------------------#
 
 
 def plot_activation(
@@ -157,7 +147,6 @@ def plot_activation(
         color = colors[idx % len(colors)]
         label = f"prompt {p_idx}" if p_idx is not None else "prompt"
         ax.plot(xs, ys, marker="o", color=color, label=label)
-        # annotate lightly every few tokens
         for x, y, tok in zip(xs, ys, tokens):
             if len(tok) > 12:
                 tok = tok[:11] + "…"
@@ -181,11 +170,6 @@ def plot_activation(
     out_path = output or f"activation_{layer.replace('.', '_')}_ch{channel}.png"
     fig.savefig(out_path, dpi=150)
     return out_path
-
-
-# ---------------------------------------------------------------------------#
-# CLI                                                                        #
-# ---------------------------------------------------------------------------#
 
 
 def main():
