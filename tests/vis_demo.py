@@ -22,6 +22,7 @@ def main():
     parser.add_argument("--model", default="HuggingFaceTB/SmolLM-360M", help="HF model id or local path.")
     parser.add_argument("--outdir", default="graphs", help="Directory to save plots.")
     parser.add_argument("--db", default="sqlite:///latents_vis_demo.db", help="LatentDB SQLite URI/path.")
+    parser.add_argument("--layer", help="Layer name to plot (defaults to first layer found after collection).")
     parser.add_argument("--channels", type=int, nargs="+", default=[0], help="Channels to plot.")
     args = parser.parse_args()
 
@@ -51,11 +52,27 @@ def main():
         batch_size=1,
     )
 
-    layer = "llm.layer.-1"
+    if args.layer:
+        layer = args.layer
+    else:
+        # Grab the first available layer from the DB.
+        import sqlite3
+
+        db_path = args.db[len("sqlite:///") :] if args.db.startswith("sqlite:///") else args.db
+        conn = sqlite3.connect(db_path)
+        cur = conn.cursor()
+        cur.execute("SELECT DISTINCT layer FROM activations ORDER BY layer LIMIT 1;")
+        row = cur.fetchone()
+        if row is None:
+            raise SystemExit("No activations found in DB; collection may have failed.")
+        layer = row[0]
+        conn.close()
+
     outputs = []
     for ch in args.channels:
         for p_idx in range(len(prompts)):
-            outfile = outdir / f"activation_layer-1_ch{ch}_prompt{p_idx}.png"
+            safe_layer = layer.replace(".", "_")
+            outfile = outdir / f"activation_{safe_layer}_ch{ch}_prompt{p_idx}.png"
             out_path = plot_activation(
                 args.db,
                 layer=layer,
