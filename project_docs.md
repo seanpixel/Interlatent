@@ -16,9 +16,10 @@
   - interlatent/collector.py: Runs a model in a Gym-like env; optional metric functions; registers hooks; converts model outputs to discrete actions; streams
     ActivationEvents and metric context into DB. Returns RunInfo.
   - interlatent/metrics.py: Metric protocol + helpers (LambdaMetric, EpisodeAccumulator) that emit one scalar per step.
-  - interlatent/train/dataset.py: Builds paired datasets (pre, post) for a layer using logged activations; each sample is a per-step vector of channel sums.
-  - interlatent/train/trainer.py: Minimal linear encoder/decoder trainer with L1 sparsity.
-  - interlatent/train/pipeline.py: Orchestrates training a transcoder for one layer: train, save artifact, then backfill latent activations (layer name
+  - interlatent/datasets/activation_pair_dataset.py: Builds paired datasets (pre, post) for a layer using logged activations; each sample is a per-step vector of channel sums.
+  - interlatent/datasets/linear_probe_dataset.py: Builds (activation vector, target) pairs by reading metrics from activation contexts for linear probe training.
+  - interlatent/analysis/train/trainer.py: Minimal linear encoder/decoder trainer with L1 sparsity.
+  - interlatent/analysis/train/pipeline.py: Orchestrates training a transcoder for one layer: train, save artifact, then backfill latent activations (layer name
     latent:{layer}) using the trained encoder so they can be correlated like normal channels.
   - interlatent/models/linear_transcoder.py: Simple relu bottleneck transcoder module (encoder/decoder).
 

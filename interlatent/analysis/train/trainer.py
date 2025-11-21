@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 
+
 class TranscoderTrainer:
     def __init__(self, in_dim, out_dim, k_latent):
         self.T = nn.Linear(in_dim, k_latent, bias=False)   # encoder

@@ -4,7 +4,7 @@ from stable_baselines3 import PPO
 from interlatent.metrics import LambdaMetric
 from interlatent.collector import Collector
 from interlatent.api import LatentDB
-from interlatent.train.pipeline import TranscoderPipeline
+from interlatent.analysis.train.pipeline import TranscoderPipeline
 
 # --------------------------------------------------------
 def load_solved_ppo_policy():

@@ -1,19 +1,17 @@
-# interlatent/train/pipeline.py
+# interlatent/analysis/train/pipeline.py
 from __future__ import annotations
 
 import datetime as _dt
-import json
 import os
-from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, Tuple
 
 import torch
 from torch.utils.data import DataLoader
 
+from interlatent.analysis.datasets import ActivationPairDataset
 from interlatent.schema import ActivationEvent, Artifact
-from interlatent.train.dataset import ActivationPairDataset
-from interlatent.train.trainer import TranscoderTrainer
+from interlatent.analysis.train.trainer import TranscoderTrainer
 
 
 class TranscoderPipeline:
@@ -122,7 +120,7 @@ class TranscoderPipeline:
         }
 
         # 3. group by (run_id, step)   →   {channel: scalar_sum}
-        grouped: Dict[Tuple[str, int], Dict[int, float]] = defaultdict(dict)
+        grouped: Dict[Tuple[str, int], Dict[int, float]] = {}
         ctx_by_key: Dict[Tuple[str, int], Dict] = {}
         for ev in events:
             key = (ev.run_id, ev.step)

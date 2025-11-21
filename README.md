@@ -21,6 +21,8 @@ The framework can hook onto given layers to collect activations, train transcode
 - RL activations: see `tests/test_end_to_end.py`.
 - LLM activations: run `python tests/llm_1.py` (env `LLM_MODEL` overrides the default HF id) to populate a SQLite DB.
 - Visuals: `python -m interlatent.vis.summary latents_llm.db` for table-style summaries; `python -m interlatent.vis.plot latents_llm.db --layer llm.layer.-1 --channel 0 --prompt-index 0` for per-prompt traces; `--all-prompts` plots a latent across prompts. `tests/vis_demo.py` shows end-to-end collection + plot generation.
+- Transcoders: use `interlatent.analysis.train.TranscoderPipeline` (see `tests/test_transcoder.py` or `scripts/run_transcoder.py`) to train sparse bottlenecks and backfill latent activations.
+- Linear probes: build datasets from LatentDB metrics with `interlatent.analysis.datasets.LinearProbeDataset`, then train a probe via `interlatent.analysis.train.train_linear_probe`.
 - User-facing documentation is WIP; APIs may change.
 
 

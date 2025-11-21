@@ -15,7 +15,7 @@ import gymnasium as gym
 from interlatent.api import LatentDB
 from interlatent.collector import Collector
 from interlatent.metrics import LambdaMetric
-from interlatent.train.pipeline import TranscoderPipeline
+from interlatent.analysis.train.pipeline import TranscoderPipeline
 
 
 def parse_metric(spec: str):
@@ -79,4 +79,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

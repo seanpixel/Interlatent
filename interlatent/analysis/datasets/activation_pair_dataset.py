@@ -5,7 +5,7 @@ import torch
 from torch.utils.data import Dataset
 
 from interlatent.api import LatentDB
-from interlatent.schema import ActivationEvent
+
 
 class ActivationPairDataset(Dataset):
     """
@@ -16,13 +16,13 @@ class ActivationPairDataset(Dataset):
     def __init__(self, db: LatentDB, layer: str, *, limit: int | None = None):
         pre_tag, post_tag = f"{layer}:pre", f"{layer}:post"
 
-        rows_pre  = db.fetch_activations(layer=pre_tag,  limit=limit)
+        rows_pre = db.fetch_activations(layer=pre_tag, limit=limit)
         rows_post = db.fetch_activations(layer=post_tag, limit=limit)
         if not rows_pre or not rows_post:
             raise ValueError(f"Missing activations for '{layer}'")
 
-        run_id = rows_pre[0].run_id                     # keep a single run
-        rows_pre  = [r for r in rows_pre  if r.run_id == run_id]
+        run_id = rows_pre[0].run_id  # keep a single run
+        rows_pre = [r for r in rows_pre if r.run_id == run_id]
         rows_post = [r for r in rows_post if r.run_id == run_id]
 
         self.samples = list(zip(*map(self._pack, (rows_pre, rows_post))))
@@ -38,11 +38,14 @@ class ActivationPairDataset(Dataset):
             if ev.step != step_prev:
                 vecs.append(torch.tensor(buf, dtype=torch.float32))
                 buf, step_prev = [], ev.step
-            buf.append(sum(ev.tensor))                  # scalar per channel
+            buf.append(sum(ev.tensor))  # scalar per channel
         if buf:
             vecs.append(torch.tensor(buf, dtype=torch.float32))
         return vecs
 
     # standard Dataset API
-    def __len__(self):            return len(self.samples)
-    def __getitem__(self, idx):   return self.samples[idx]
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, idx):
+        return self.samples[idx]
