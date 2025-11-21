@@ -172,6 +172,93 @@ def plot_activation(
     return out_path
 
 
+def plot_latent_across_prompts(
+    db: str,
+    *,
+    layer: str,
+    channel: int,
+    gap: int = 2,
+    max_label_len: int = 32,
+    output: str | None = None,
+):
+    """
+    Plot a single latent (layer/channel) across *all* prompts.
+
+    X-axis groups tokens by prompt in sequence; labels show the first few words
+    of each prompt. Y-axis is activation value per token.
+    """
+    rows = fetch_activations(db, layer=layer, channel=channel)
+    if not rows:
+        raise ValueError("No activations found for the requested slice.")
+
+    grouped: dict[int | None, list[ActivationRow]] = {}
+    for r in rows:
+        grouped.setdefault(r.prompt_index, []).append(r)
+
+    # Stable order by prompt_index (None last)
+    ordered = sorted(grouped.items(), key=lambda kv: (kv[0] is None, kv[0] or 0))
+
+    xs_all: list[int] = []
+    ys_all: list[float] = []
+    colors: list[str] = []
+    tokens: list[str] = []
+    xticks: list[float] = []
+    xtick_labels: list[str] = []
+
+    base_x = 0
+    palette = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b"]
+
+    for idx, (p_idx, lst) in enumerate(ordered):
+        lst.sort(key=lambda r: r.token_index)
+        prompt_tokens_x = []
+        prompt_tokens_y = []
+        prompt_tokens_str = []
+        for r in lst:
+            x = base_x + (r.token_index or 0)
+            prompt_tokens_x.append(x)
+            prompt_tokens_y.append(r.value)
+            prompt_tokens_str.append(r.token or "")
+        if not prompt_tokens_x:
+            continue
+
+        mid = (prompt_tokens_x[0] + prompt_tokens_x[-1]) / 2
+        label = (lst[0].prompt or f"prompt {p_idx}") if lst else f"prompt {p_idx}"
+        label = " ".join(label.split()[:6])
+        if len(label) > max_label_len:
+            label = label[: max_label_len - 1] + "…"
+
+        xticks.append(mid)
+        xtick_labels.append(label)
+
+        color = palette[idx % len(palette)]
+        xs_all.extend(prompt_tokens_x)
+        ys_all.extend(prompt_tokens_y)
+        colors.extend([color] * len(prompt_tokens_x))
+        tokens.extend(prompt_tokens_str)
+
+        base_x = prompt_tokens_x[-1] + gap
+
+    fig, ax = plt.subplots(figsize=(12, 4))
+    ax.scatter(xs_all, ys_all, c=colors, s=20, alpha=0.85)
+
+    for x, y, tok in zip(xs_all, ys_all, tokens):
+        if len(tok) > 12:
+            tok = tok[:11] + "…"
+        ax.text(x, y, tok, fontsize=7, rotation=45, ha="right", va="bottom", alpha=0.6)
+
+    ax.set_xticks(xticks)
+    ax.set_xticklabels(xtick_labels, rotation=25, ha="right")
+    ax.set_xlabel("prompts (grouped tokens)")
+    ax.set_ylabel("activation value")
+    ax.set_title(f"Latent across prompts: {layer} / ch {channel}")
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+
+    out_path = output or f"activation_allprompts_{layer.replace('.', '_')}_ch{channel}.png"
+    fig.savefig(out_path, dpi=150)
+    return out_path
+
+
 def main():
     parser = argparse.ArgumentParser(description="Plot activations for a given layer/channel/prompt.")
     parser.add_argument("db", help="LatentDB SQLite path or sqlite:/// URI.")
@@ -179,17 +266,26 @@ def main():
     parser.add_argument("--channel", type=int, required=True, help="Channel index.")
     parser.add_argument("--prompt-index", type=int, help="Prompt index to plot.")
     parser.add_argument("--prompt-like", help="Substring to match prompt text (SQL LIKE).")
+    parser.add_argument("--all-prompts", action="store_true", help="Plot this latent across all prompts.")
     parser.add_argument("--output", help="Output PNG path.")
     args = parser.parse_args()
 
-    out = plot_activation(
-        args.db,
-        layer=args.layer,
-        channel=args.channel,
-        prompt_index=args.prompt_index,
-        prompt_like=args.prompt_like,
-        output=args.output,
-    )
+    if args.all_prompts:
+        out = plot_latent_across_prompts(
+            args.db,
+            layer=args.layer,
+            channel=args.channel,
+            output=args.output,
+        )
+    else:
+        out = plot_activation(
+            args.db,
+            layer=args.layer,
+            channel=args.channel,
+            prompt_index=args.prompt_index,
+            prompt_like=args.prompt_like,
+            output=args.output,
+        )
     print(f"Wrote plot to {out}")
 
 

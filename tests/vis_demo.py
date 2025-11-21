@@ -82,6 +82,16 @@ def main():
             )
             outputs.append(out_path)
 
+        # Also plot this latent across all prompts.
+        agg_outfile = outdir / f"activation_allprompts_{safe_layer}_ch{ch}.png"
+        out_path = plot_latent_across_prompts(
+            args.db,
+            layer=layer,
+            channel=ch,
+            output=str(agg_outfile),
+        )
+        outputs.append(out_path)
+
     print("Plots saved:")
     for p in outputs:
         print(" -", p)
