@@ -31,6 +31,7 @@ class ActivationRow:
     value: float
     prompt_index: int | None
     prompt: str | None
+    run_id: str | None = None
 
 
 def _open_db(uri: str) -> sqlite3.Connection:
@@ -73,7 +74,7 @@ def fetch_activations(
     cur = conn.cursor()
 
     sql = [
-        "SELECT prompt_index, prompt, token_index, token, tensor",
+        "SELECT run_id, prompt_index, prompt, token_index, token, tensor",
         "FROM activations",
         "WHERE layer=? AND channel=?",
     ]
@@ -90,7 +91,7 @@ def fetch_activations(
     if limit_prompts is not None:
         # limit prompts by grouping prompt_index; simple approach via subquery.
         sql = [
-            "SELECT prompt_index, prompt, token_index, token, tensor FROM (",
+            "SELECT run_id, prompt_index, prompt, token_index, token, tensor FROM (",
             *sql,
             ") WHERE prompt_index IN (SELECT DISTINCT prompt_index FROM activations WHERE layer=? AND channel=? LIMIT ?)",
         ]
@@ -98,7 +99,7 @@ def fetch_activations(
 
     cur.execute(" ".join(sql), params)
     rows = []
-    for p_idx, prompt, t_idx, token, tensor_json in cur.fetchall():
+    for run_id, p_idx, prompt, t_idx, token, tensor_json in cur.fetchall():
         tensor = json.loads(tensor_json) if tensor_json else []
         val = tensor[0] if tensor else 0.0
         rows.append(
@@ -108,6 +109,7 @@ def fetch_activations(
                 value=float(val),
                 prompt_index=p_idx,
                 prompt=prompt,
+                run_id=run_id,
             )
         )
     return rows
@@ -147,21 +149,33 @@ def plot_activation(
     for lst in grouped.values():
         lst.sort(key=lambda r: r.token_index)
 
-    fig, ax = plt.subplots(figsize=(10, 4))
+    fig, ax = plt.subplots(figsize=(12, 5))
 
+    # build readable x labels
     colors = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728"]
     for idx, (p_idx, lst) in enumerate(sorted(grouped.items(), key=lambda kv: kv[0] or 0)):
         xs = [r.token_index for r in lst]
         ys = [r.value for r in lst]
         tokens = [r.token or "" for r in lst]
+        text_labels = [f"{_pretty_token(tok)}\n(p{p_idx},t{ti})" for tok, ti in zip(tokens, xs)]
         color = colors[idx % len(colors)]
         label = f"prompt {p_idx}" if p_idx is not None else "prompt"
         ax.plot(xs, ys, marker="o", color=color, label=label)
-        for x, y, tok in zip(xs, ys, tokens):
-            tok = _pretty_token(tok)
-            if len(tok) > 12:
-                tok = tok[:11] + "…"
-            ax.text(x, y, tok, fontsize=7, rotation=0, ha="right", va="bottom", color=color, alpha=0.7)
+        for x, y, text in zip(xs, ys, text_labels):
+            tok = text
+            if len(tok) > 16:
+                tok = tok[:15] + "…"
+            ax.text(
+                x,
+                y,
+                tok,
+                fontsize=7,
+                rotation=30,
+                ha="right",
+                va="bottom",
+                color=color,
+                alpha=0.8,
+            )
 
     prompt_text = rows[0].prompt or ""
     if prompt_like:
