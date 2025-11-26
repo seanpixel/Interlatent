@@ -12,7 +12,7 @@ import argparse
 import json
 import os
 import sqlite3
-from typing import List, Sequence, Tuple
+from typing import List, Sequence, Tuple, Optional
 
 
 def _open_db(uri: str) -> sqlite3.Connection:
@@ -131,19 +131,78 @@ def head(conn: sqlite3.Connection, limit: int = 5) -> str:
     return _format_table(headers, rows)
 
 
+def list_layers(conn: sqlite3.Connection, prefix: str | None = None, top: int = 50) -> str:
+    cur = conn.cursor()
+    sql = "SELECT layer, COUNT(*) as c FROM activations"
+    params: list = []
+    if prefix:
+        sql += " WHERE layer LIKE ?"
+        params.append(f"{prefix}%")
+    sql += " GROUP BY layer ORDER BY c DESC LIMIT ?"
+    params.append(top)
+    cur.execute(sql, params)
+    rows = cur.fetchall()
+    headers = ["layer", "rows"]
+    return _format_table(headers, rows, max_width=64)
+
+
+def layer_stats(conn: sqlite3.Connection, layer: str) -> str:
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT layer, channel, count, mean, std, min, max, correlations, last_updated
+        FROM stats
+        WHERE layer = ?
+        ORDER BY channel
+        """,
+        (layer,),
+    )
+    rows = []
+    for r in cur.fetchall():
+        corrs = json.loads(r[7] or "[]")
+        top = ", ".join(f"{m}:{rho:+.2f}" for m, rho in corrs[:3]) if corrs else ""
+        rows.append(
+            [
+                r[0],
+                r[1],
+                r[2],
+                f"{r[3]:.3f}",
+                f"{r[4]:.3f}",
+                f"{r[5]:.3f}",
+                f"{r[6]:.3f}",
+                top,
+                r[8],
+            ]
+        )
+    headers = ["layer", "ch", "count", "mean", "std", "min", "max", "top_corr", "updated"]
+    return _format_table(headers, rows, max_width=32)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Quick, dependency-free summaries of an Interlatent SQLite DB.")
     parser.add_argument("db", help="Path or sqlite:/// URI for the DB.")
     parser.add_argument("--limit", type=int, default=5, help="Rows to show in the head table.")
     parser.add_argument("--top", type=int, default=10, help="Number of layers to include in the histogram.")
+    parser.add_argument("--list-layers", action="store_true", help="List layers and row counts instead of histogram.")
+    parser.add_argument("--layer-prefix", help="Filter layer listing by prefix (e.g., 'latent:' or 'latent_sae:').")
+    parser.add_argument("--layer-stats", help="Show stats/correlations for a specific layer (e.g., latent:llm.layer.-1).")
     args = parser.parse_args()
 
     conn = _open_db(args.db)
 
     print("== Summary ==")
     print(summary(conn))
-    print("\n== Layer histogram (top {0}) ==".format(args.top))
-    print(layer_histogram(conn, top=args.top))
+    if args.list_layers:
+        print("\n== Layers ==")
+        print(list_layers(conn, prefix=args.layer_prefix, top=args.top))
+    else:
+        print("\n== Layer histogram (top {0}) ==".format(args.top))
+        print(layer_histogram(conn, top=args.top))
+
+    if args.layer_stats:
+        print(f"\n== Stats for layer '{args.layer_stats}' ==")
+        print(layer_stats(conn, args.layer_stats))
+
     print(f"\n== Head (first {args.limit} rows) ==")
     print(head(conn, limit=args.limit))
 
