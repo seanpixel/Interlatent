@@ -158,11 +158,13 @@ class LLMCollector:
 
                 for b_idx, prompt_text in enumerate(batch):
                     prompt_idx = i + b_idx
-                    prompt_len = min(
-                        int(attn_mask_full[b_idx].sum().item()),
-                        layer_tensor.shape[1],
-                        seq_tokens.shape[1],
-                    )
+                    if attn_mask_full is not None:
+                        prompt_len = int(attn_mask_full[b_idx].ne(0).sum().item())
+                    else:
+                        prompt_len = seq_tokens.shape[1]
+                    if prompt_len <= 0:
+                        prompt_len = seq_tokens.shape[1]
+                    prompt_len = min(prompt_len, layer_tensor.shape[1], seq_tokens.shape[1])
                     seq_ids = seq_tokens[b_idx][:prompt_len].tolist()
                     seq_tokens_str = tokens_decoded[b_idx][:prompt_len]
 
