@@ -13,7 +13,7 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from interlatent.api import LatentDB
-from interlatent.llm import VLLMCollector
+from interlatent.collectors.llm_collector import LLMCollector
 from interlatent.vis.plot import plot_activation, plot_latent_across_prompts
 
 
@@ -43,7 +43,7 @@ def main():
     ]
 
     db = LatentDB(args.db)
-    collector = VLLMCollector(db, layer_indices=[-1], max_channels=max(args.channels) + 1)
+    collector = LLMCollector(db, layer_indices=[-1], max_channels=max(args.channels) + 1)
     collector.run(
         model,
         tok,

@@ -1,11 +1,4 @@
-"""interlatent.collector
-
-Utility that runs a model in an environment or dataloader, streams
-ActivationEvents into a LatentDB, and returns basic run statistics.
-
-Intended for quick experiments—not a full RL rollout manager.  Works with
-any env that exposes the classic Gym API (`reset`, `step`).
-"""
+"""Collector for gym-like environments (PyTorch policy)."""
 from __future__ import annotations
 
 import time
@@ -16,23 +9,23 @@ from typing import Dict, List, Optional, Sequence, Any
 import numpy as np
 import torch
 
-from .schema import ActivationEvent, RunInfo
-from .api.latent_db import LatentDB
-from .utils.logging import get_logger
-from .metrics import Metric
+from interlatent.schema import ActivationEvent, RunInfo
+from interlatent.api.latent_db import LatentDB
+from interlatent.utils.logging import get_logger
+from interlatent.metrics import Metric
 from interlatent.hooks import PrePostHookCtx
 
 try:  # TorchHook will be implemented in hooks.py; we import lazily.
-    from .hooks import TorchHook  # type: ignore
+    from interlatent.hooks import TorchHook  # type: ignore
 except ImportError:  # pragma: no cover – until hooks.py exists
     TorchHook = None  # type: ignore
 
 _LOG = get_logger(__name__)
 
-__all__ = ["Collector"]
+__all__ = ["GymCollector"]
 
 
-class Collector:
+class GymCollector:
     """Streams activations during a simulation run into a LatentDB."""
 
     def __init__(
@@ -50,24 +43,8 @@ class Collector:
         self.batch_size = batch_size
         self.device = device
 
-    # ------------------------------------------------------------------
-    # Public entry ------------------------------------------------------
-    # ------------------------------------------------------------------
-
     def run(self, model: torch.nn.Module, env, *, steps: int = 10_000, tags: Optional[Dict] = None) -> RunInfo:
-        """Execute *steps* interactions and record activations.
-
-        Parameters
-        ----------
-        model:
-            PyTorch policy/network; must accept env observations as first arg.
-        env:
-            Object implementing `reset() -> obs` and `step(action)`.
-        steps:
-            Number of timesteps to collect.
-        tags:
-            Arbitrary user metadata (seed, difficulty…).
-        """
+        """Execute *steps* interactions and record activations."""
 
         env_name = (
             getattr(getattr(env, "spec", None), "id", None)  # e.g. "CartPole-v1"
@@ -75,13 +52,12 @@ class Collector:
         )
 
         action_space = env.action_space
-                
+
         run_id = uuid.uuid4().hex
         run_info = RunInfo(run_id=run_id, env_name=env_name or str(env), tags=tags or {})
 
         model.eval().to(self.device)
 
-        # Determine action function. We assume model(obs_tensor) → tensor action logits or direct action.
         def policy(obs):
             # unwrap (obs, info) that Gymnasium reset/step may give back
             if isinstance(obs, (tuple, list)):
@@ -92,35 +68,30 @@ class Collector:
             with torch.no_grad():
                 out = model(x)
 
-            # ── normalize the variety of return types ─────────────────────
             if isinstance(out, tuple):
-                # SB3 PPO returns (action, value, log_prob)  – keep the sampled action
                 out = out[0]
             elif isinstance(out, dict):
-                # Custom nets might return a dict; try common keys or first value
                 out = out.get("logits") or out.get("action") or next(iter(out.values()))
 
             if not torch.is_tensor(out):
                 raise TypeError("Model forward must return a Tensor, tuple or dict of Tensors")
 
-            # ── Discrete action handling ───────────────────────────────────
             if out.dim() == 0 or (out.dim() == 1 and out.numel() == 1):
-                # already a sampled action (SB3)
                 return int(out.item())
 
-            if hasattr(action_space, "n"):           # Discrete logits
-                logits = out.squeeze(0)              # (1,n) → (n,)  or no-op if already (n,)
-                logits = logits[: action_space.n]    # trim oversize heads
+            if hasattr(action_space, "n"):
+                logits = out.squeeze(0)
+                logits = logits[: action_space.n]
                 return int(torch.argmax(logits).item())
 
-            raise NotImplementedError("Collector demo-policy only supports discrete actions.")
+            raise NotImplementedError("GymCollector demo-policy only supports discrete actions.")
 
-        
         step_ctx: Dict[str, Any] = {}
         step_ctx["metrics"] = {}
-        def ctx_supplier():   # closure visible to hooks
+
+        def ctx_supplier():  # closure visible to hooks
             return step_ctx
-        
+
         hook_ctx = (
             PrePostHookCtx(
                 model,
@@ -157,8 +128,9 @@ class Collector:
                     for m in self.metrics.values():
                         m.reset()
                     obs, _ = env.reset()
-                    _LOG.debug("Episode done at step %d (len=%d, score=%f)",
-                               step, episode_len, score)
+                    _LOG.debug(
+                        "Episode done at step %d (len=%d, score=%f)", step, episode_len, score
+                    )
                     score = episode_len = 0
 
         _LOG.info("Run %s finished (%d steps)", run_id, steps)

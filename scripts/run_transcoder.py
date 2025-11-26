@@ -13,7 +13,7 @@ from pathlib import Path
 
 import gymnasium as gym
 from interlatent.api import LatentDB
-from interlatent.collector import Collector
+from interlatent.collectors.gym_collector import GymCollector
 from interlatent.metrics import LambdaMetric
 from interlatent.analysis.train.pipeline import TranscoderPipeline
 
@@ -62,7 +62,7 @@ def main():
     db = LatentDB(f"sqlite:///{Path(args.db_path).resolve()}")
 
     metrics = [parse_metric(m) for m in args.metric] if args.metric else []
-    collector = Collector(db, hook_layers=[args.layer], metric_fns=metrics)
+    collector = GymCollector(db, hook_layers=[args.layer], metric_fns=metrics)
     collector.run(policy, env, steps=args.steps)
 
     pipe = TranscoderPipeline(db, args.layer, k=args.k, epochs=args.epochs)

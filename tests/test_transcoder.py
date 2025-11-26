@@ -2,7 +2,7 @@ import gymnasium as gym
 from stable_baselines3 import PPO
 
 from interlatent.metrics import LambdaMetric
-from interlatent.collector import Collector
+from interlatent.collectors.gym_collector import GymCollector
 from interlatent.api import LatentDB
 from interlatent.analysis.train.pipeline import TranscoderPipeline
 
@@ -18,7 +18,7 @@ def test_transcoder_saved_and_correlated(tmp_path):
     env   = gym.make("CartPole-v1")
     model = load_solved_ppo_policy()
 
-    collector = Collector(
+    collector = GymCollector(
         db,
         hook_layers=["mlp_extractor.policy_net.0"],
         metric_fns=[LambdaMetric("pole_angle", lambda obs, **_: float(obs[2]))],

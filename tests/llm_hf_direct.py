@@ -1,11 +1,4 @@
-"""
-Smoke test: run VLLMCollector directly on a local HuggingFace model
-without going through vLLM (no download).
-
-Usage:
-  export HF_MODEL_DIR=/path/to/local/model/dir
-  python tests/llm_hf_direct.py
-"""
+"""Smoke test: run LLMCollector directly on a HF model."""
 from __future__ import annotations
 
 import argparse
@@ -15,12 +8,12 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from interlatent.api import LatentDB
-from interlatent.llm import VLLMCollector
+from interlatent.collectors.llm_collector import LLMCollector
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Run VLLMCollector directly on a HF model (local path or hub id)."
+        description="Run LLMCollector directly on a HF model (local path or hub id)."
     )
     parser.add_argument("model_id_or_path", help="HF hub id (e.g., HuggingFaceTB/SmolLM-360M) or local directory.")
     args = parser.parse_args()
@@ -37,7 +30,7 @@ def main():
     )
 
     db = LatentDB("sqlite:///latents_hf_local.db")
-    collector = VLLMCollector(db, layer_indices=[-1], max_channels=512)
+    collector = LLMCollector(db, layer_indices=[-1], max_channels=512)
     collector.run(
         model,
         tok,

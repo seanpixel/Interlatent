@@ -9,7 +9,7 @@ from typing import Dict, Tuple
 import torch
 from torch.utils.data import DataLoader
 
-from interlatent.analysis.datasets import ActivationPairDataset
+from interlatent.analysis.datasets import ActivationPairDataset, ActivationVectorDataset
 from interlatent.schema import ActivationEvent, Artifact
 from interlatent.analysis.train.trainer import TranscoderTrainer
 
@@ -46,7 +46,7 @@ class TranscoderPipeline:
 
     def run(self):
         # ---- 0  fetch dataset ------------------------------------------------
-        ds = ActivationPairDataset(self.db, self.layer)
+        ds = self._build_dataset()
         loader = DataLoader(ds, batch_size=256, shuffle=True)
 
         # ---- 1  train sparse AE ---------------------------------------------
@@ -62,6 +62,31 @@ class TranscoderPipeline:
         return trainer
 
     # ------------------------------------------------------------------ helpers
+
+    def _build_dataset(self):
+        """
+        Prefer paired pre/post activations; fall back to single-stream
+        activations by training an autoencoder on the post activations.
+        """
+        try:
+            return ActivationPairDataset(self.db, self.layer)
+        except ValueError:
+            vec_ds = ActivationVectorDataset(self.db, self.layer)
+
+            class AutoencoderDataset(torch.utils.data.Dataset):
+                def __init__(self, base):
+                    self.base = base
+                    self.in_dim = base.in_dim
+                    self.out_dim = base.in_dim
+
+                def __len__(self):
+                    return len(self.base)
+
+                def __getitem__(self, idx):
+                    x, _ctx = self.base[idx]
+                    return x, x
+
+            return AutoencoderDataset(vec_ds)
 
     def _save_artifact(self, trainer):
         """
@@ -114,17 +139,16 @@ class TranscoderPipeline:
         # 2. Grab metrics from the post activations
         ctx_events = self.db.fetch_activations(layer=f"{self.layer}:post")
         ctx_by_key = {
-            (ev.run_id, ev.step): ev.context
+            (ev.run_id, ev.step): (ev.context or {})
             for ev in ctx_events
-            if ev.context.get("metrics")          # ensure metrics present
+            if ev.context and ev.context.get("metrics")
         }
 
         # 3. group by (run_id, step)   →   {channel: scalar_sum}
         grouped: Dict[Tuple[str, int], Dict[int, float]] = {}
-        ctx_by_key: Dict[Tuple[str, int], Dict] = {}
         for ev in events:
             key = (ev.run_id, ev.step)
-            grouped[key][ev.channel] = ev.value_sum or sum(ev.tensor)
+            grouped.setdefault(key, {})[ev.channel] = ev.value_sum or sum(ev.tensor)
             ctx_by_key.setdefault(key, ev.context or {})
 
         # 4. push latent events

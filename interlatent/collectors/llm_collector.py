@@ -1,13 +1,4 @@
-"""interlatent.llm.collector
-
-Collect activations from HuggingFace causal LMs over a dataset of prompts.
-
-Notes
------
-- This is geared toward *small* models and small prompt sets. Capturing
-  every hidden dimension for long sequences will explode storage; use
-  `max_channels` to downsample.
-"""
+"""Collector for HuggingFace causal LMs over prompt datasets."""
 from __future__ import annotations
 
 import uuid
@@ -31,10 +22,10 @@ except ImportError:  # pragma: no cover
 
 _LOG = get_logger(__name__)
 
-__all__ = ["VLLMCollector"]
+__all__ = ["LLMCollector"]
 
 
-class VLLMCollector:
+class LLMCollector:
     """
     Collect activations from a HuggingFace language model over a list of prompts.
 
@@ -58,11 +49,13 @@ class VLLMCollector:
         layer_indices: Sequence[int] | None = None,
         max_channels: int | None = None,
         device: str | torch.device | None = None,
+        token_metrics_fn=None,
     ):
         self.db = db
         self.layer_indices = list(layer_indices) if layer_indices is not None else [-1]
         self.max_channels = max_channels
         self.device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
+        self.token_metrics_fn = token_metrics_fn
 
     # ------------------------------------------------------------------
     def run(
@@ -190,6 +183,20 @@ class VLLMCollector:
                                 "prompt_index": prompt_idx,
                                 "batch_offset": i,
                             }
+                            if self.token_metrics_fn is not None:
+                                try:
+                                    metrics = self.token_metrics_fn(
+                                        prompt_idx=prompt_idx,
+                                        token_idx=token_idx,
+                                        token=token_val,
+                                        prompt=prompt_text,
+                                        layer_index=layer_idx,
+                                        channel=ch,
+                                    )
+                                    if metrics:
+                                        ctx["metrics"] = {k: float(v) for k, v in metrics.items()}
+                                except Exception as exc:  # pragma: no cover - defensive
+                                    _LOG.warning("token_metrics_fn failed: %s", exc)
                             self.db.write_event(
                                 ActivationEvent(
                                     run_id=run_id,
@@ -209,7 +216,7 @@ class VLLMCollector:
                             event_step += 1
 
         self.db.flush()
-        _LOG.info("vLLM collection finished: %s (%d prompts)", run_id, len(prompts))
+        _LOG.info("LLM collection finished: %s (%d prompts)", run_id, len(prompts))
         return run_info
 
     # ------------------------------------------------------------------
