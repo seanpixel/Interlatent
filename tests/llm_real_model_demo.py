@@ -58,7 +58,7 @@ def main():
 
     sae_pipe = SAEPipeline(db, "llm.layer.20", k=8, epochs=1)
     sae_model = sae_pipe.run()
-    sae_latents = db.fetch_activations(layer="latent_sae:llm.layer.-1")
+    sae_latents = db.fetch_activations(layer="latent_sae:llm.layer.20")
     print(f"[sae] latent rows={len(sae_latents)}, encoder_shape={tuple(sae_model.encoder.weight.shape)}")
 
     db.close()
