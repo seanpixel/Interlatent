@@ -1,34 +1,46 @@
 # Interlatent
-An open-source tool for peeking into both RL agents and language models by collecting, storing, and visualizing internal activations.
+Interpret RL policies and HuggingFace LLMs by collecting activations, training sparse latents (transcoders/SAEs), probing, and visualizing what fires on which tokens.
 
+## What’s new
+- LLM workflows: token-level collection with metrics, transcoder + SAE pipelines that backfill latent activations into the DB, and linear probes over LLM hidden states.
+- Datasets: activation vectors (per token/step), pre/post pairs, and probe datasets that preserve prompt/token metadata.
+- Visualization: quick summaries, targeted searches, and per-token plots that work for latent layers (`latent:`) and SAE latents (`latent_sae:`).
 
-## Background
-Back in June 2025, I experimented in interpreting simple RL models adopting the [transcoder methodology](https://transformer-circuits.pub/2025/attribution-graphs/methods.html) developed by Anthropic to understand LLMs. Largely inspired by language model interpretability research, my hypothesis was that we can also probe RL agents by tracking how their internal activations affect their behavior (feature extraction) and steer policy by manipulating inner workings (intervention). RL environments supply a large pool of signal where we can obtain metrics to correlate with potentially interpretable activations to gain insights such as "feature 4 of layer 2 spikes when the Pacman agent approaches a power pellet". I wrote a blog post summarizing [this proof of concept](https://seanpixel.com/interpretable-rl-via-multiscale-transcoders-sparse-bottlenecks-at-2-4-and-8-dimensions) and spent weeks applying it to more complex RL environments. This repository serves as a tool for replicating this research for any and all models and environments, now including language models for interpretability workflows without RL.
+## Quickstart
+1) Collect activations
+```bash
+# LLM (defaults to SmolLM-360M unless LLM_MODEL is set)
+PYTHONPATH=. python tests/llm_workflow_demo.py            # dummy model demo
+RUN_LLM_REAL=1 PYTHONPATH=. python tests/llm_real_model_demo.py  # real HF model demo
 
+# RL
+python tests/test_transcoder.py   # SB3 CartPole smoke; collects and trains a transcoder
+```
 
-## How it works
-Interlatent streamlines extracting and inspecting activations:
-1. Collect activations of specific layers from RL policies or HuggingFace LMs over rollouts/prompts, storing them in a SQLite-backed LatentDB.
-2. (Optional) Train transcoders that bottleneck linear layers to produce sparse latent features.
-3. Track and record metrics (RL env rewards, custom signals) to correlate with activations.
-4. Visualize and explore activations: per-token traces, cross-prompt latent views, and quick DB summaries.
+2) Train latents / probes
+- Transcoder: `from interlatent.analysis.train import TranscoderPipeline; TranscoderPipeline(db, "llm.layer.-1", k=8).run()`
+- SAE: `from interlatent.analysis.train import SAEPipeline; SAEPipeline(db, "llm.layer.-1", k=8).run()`
+- Linear probe: `from interlatent.analysis.train import train_linear_probe; train_linear_probe(db, layer="llm.layer.-1", target_key="token_id")`
+- Prompt datasets + labels: use `from interlatent.llm import PromptDataset`; build with texts + labels (e.g., benign/malignant) and pass to `LLMCollector(..., prompt_context_fn=ds.prompt_context_fn(), token_metrics_fn=ds.token_metrics_fn("label"))` while using `prompts=ds.texts`.
 
+3) Inspect & plot
+- Summary/list layers: `python -m interlatent.vis.summary latents.db --list-layers --layer-prefix latent:`
+- Search activations: `python -m interlatent.vis.search latents.db --layer-prefix latent: --token-like sky --top 20`
+- Plot per-token: `python -m interlatent.vis.plot latents.db --layer latent:llm.layer.-1 --channel 0 --prompt-index 0`
+- Plot across prompts: add `--all-prompts`
 
-## Current Progress
-The framework can hook onto given layers to collect activations, train transcoders using those activations, and compute correlations between each feature and metrics. It now includes HuggingFace LLM collectors and visualization utilities (per-token plots and cross-prompt latent plots). Scaling up to bigger models/environments will require more compute; this repo is a working but scrappy toolkit.
+## Key Modules
+- Collection: `interlatent.collectors.LLMCollector`, `GymCollector` (RL) write `ActivationEvent`s into SQLite.
+- Datasets: `ActivationVectorDataset`, `ActivationPairDataset`, `LinearProbeDataset`.
+- Training: `TranscoderPipeline`, `SAEPipeline`, `train_linear_probe`.
+- Models: `LinearProbe`, `LinearTranscoder`, `SparseAutoencoder`.
+- DB façade: `interlatent.api.LatentDB` (SQLite by default).
+- Visualization: `interlatent.vis.summary`, `interlatent.vis.search`, `interlatent.vis.plot`.
 
-## How to Use
-- RL activations: see `tests/test_end_to_end.py`.
-- LLM activations: run `python tests/llm_1.py` (env `LLM_MODEL` overrides the default HF id) to populate a SQLite DB using `interlatent.collectors.LLMCollector`.
-- Visuals: `python -m interlatent.vis.summary latents_llm.db` for table-style summaries; `python -m interlatent.vis.plot latents_llm.db --layer llm.layer.-1 --channel 0 --prompt-index 0` for per-prompt traces; `--all-prompts` plots a latent across prompts. `tests/vis_demo.py` shows end-to-end collection + plot generation.
-- Transcoders: use `interlatent.analysis.train.TranscoderPipeline` (see `tests/test_transcoder.py` or `scripts/run_transcoder.py`) to train sparse bottlenecks and backfill latent activations (GymCollector for RL, LLMCollector for LMs).
-- Linear probes: build datasets from LatentDB metrics with `interlatent.analysis.datasets.LinearProbeDataset`, then train a probe via `interlatent.analysis.train.train_linear_probe`.
-- User-facing documentation is WIP; APIs may change.
+## Notes
+- LLM collection preserves `prompt_index`/`token_index` so latents backfilled by the pipelines align to tokens.
+- Transcoder/SAE backfills write new layers `latent:{layer}` and `latent_sae:{layer}` so stats/correlations and plots work the same as base layers.
+- Scripts are lightweight demos; adjust epochs/k for real training.
 
-
-## Future Plans & Motivations
-Unlike current reasoning language models, RL-trained real-world agents carry out actions without “reasoning traces", which means that we have no idea why the model does what it does and what thoughts it has in mind while performing an action (technically, reasoning traces are black-boxes too but RL is worse). 
-
-While carrying out previous experiments interpreting the cartpole agent with transcoders, I noticed myself asking LLMs to decipher latent activations by feeding it information such as correlation with acceleration, position, pole angular velocity etc. Now I ask myself: What if we do this real-time on a more complex environment? What if we can get an explanation of a humanoid agent’s mind asynchronously while they act? 
-
-This tool serves as an initial stepping-stone to creating human-in-loop AI systems where we will eventually be able to understand real-time: why manufacturing robots make mistakes in edge-cases, why Tesla humanoids will take certain actions, and what biases Waymos might have.
+## Future
+- Better docs, richer metrics for LLMs, and UI for browsing latent-token interactions. PRs welcome.

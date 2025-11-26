@@ -50,12 +50,14 @@ class LLMCollector:
         max_channels: int | None = None,
         device: str | torch.device | None = None,
         token_metrics_fn=None,
+        prompt_context_fn=None,
     ):
         self.db = db
         self.layer_indices = list(layer_indices) if layer_indices is not None else [-1]
         self.max_channels = max_channels
         self.device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
         self.token_metrics_fn = token_metrics_fn
+        self.prompt_context_fn = prompt_context_fn
 
     # ------------------------------------------------------------------
     def run(
@@ -168,6 +170,13 @@ class LLMCollector:
                     seq_ids = seq_tokens[b_idx][:prompt_len].tolist()
                     seq_tokens_str = tokens_decoded[b_idx][:prompt_len]
 
+                    prompt_ctx = {}
+                    if self.prompt_context_fn is not None:
+                        try:
+                            prompt_ctx = self.prompt_context_fn(prompt_text, prompt_idx) or {}
+                        except Exception as exc:  # pragma: no cover - defensive
+                            _LOG.warning("prompt_context_fn failed: %s", exc)
+
                     for token_idx in range(prompt_len):
                         token_val = {
                             "id": seq_ids[token_idx],
@@ -185,6 +194,8 @@ class LLMCollector:
                                 "prompt_index": prompt_idx,
                                 "batch_offset": i,
                             }
+                            if prompt_ctx:
+                                ctx.update(prompt_ctx)
                             if self.token_metrics_fn is not None:
                                 try:
                                     metrics = self.token_metrics_fn(
