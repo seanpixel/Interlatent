@@ -87,7 +87,7 @@ def fetch_activations(
         sql.append("AND prompt LIKE ?")
         params.append(f"%{prompt_like}%")
 
-    sql.append("ORDER BY prompt_index, token_index")
+    sql.append("ORDER BY prompt_index, token_index, step")
     if limit_prompts is not None:
         # limit prompts by grouping prompt_index; simple approach via subquery.
         sql = [

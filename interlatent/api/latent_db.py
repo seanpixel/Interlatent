@@ -168,7 +168,7 @@ class LatentDB:
         """
         cur = self._store._conn.cursor()          # safe: read-only
         sql = (
-            "SELECT run_id, step, layer, channel, tensor, context "
+            "SELECT run_id, step, layer, channel, prompt, prompt_index, token_index, token, tensor, context "
             "FROM activations WHERE layer = ? "
             "ORDER BY step, channel"
         )
@@ -184,6 +184,10 @@ class LatentDB:
                 step=r["step"],
                 layer=r["layer"],
                 channel=r["channel"],
+                prompt=r.get("prompt"),
+                prompt_index=r.get("prompt_index"),
+                token_index=r.get("token_index"),
+                token=r.get("token"),
                 tensor=json.loads(r["tensor"]),
                 context=json.loads(r["context"]) if r["context"] else {},
             )
