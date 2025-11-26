@@ -77,15 +77,29 @@ class SAEPipeline:
         if not events:
             raise RuntimeError(f"No activations found for layer '{self.layer}'")
 
-        grouped: Dict[Tuple[str, int], Dict[int, float]] = {}
-        ctx_by_key: Dict[Tuple[str, int], Dict] = {}
+        grouped: Dict[Tuple[str, int, int] | Tuple[str, int], Dict[int, float]] = {}
+        ctx_by_key: Dict[Tuple[str, int, int] | Tuple[str, int], Dict] = {}
+        meta_by_key: Dict[Tuple[str, int, int] | Tuple[str, int], Dict[str, object]] = {}
+        def key_for(ev):
+            if ev.prompt_index is not None and ev.token_index is not None:
+                return (ev.run_id, ev.prompt_index, ev.token_index)
+            return (ev.run_id, ev.step)
         for ev in events:
-            key = (ev.run_id, ev.step)
+            key = key_for(ev)
             grouped.setdefault(key, {})[ev.channel] = ev.value_sum or sum(ev.tensor)
             ctx_by_key.setdefault(key, ev.context or {})
+            if key not in meta_by_key:
+                meta_by_key[key] = {
+                    "prompt": ev.prompt,
+                    "prompt_index": ev.prompt_index,
+                    "token_index": ev.token_index,
+                    "token": ev.token,
+                }
 
         with torch.no_grad():
-            for (run_id, step), vec_dict in grouped.items():
+            for key, vec_dict in grouped.items():
+                run_id = key[0]
+                step = key[1] if len(key) == 2 else key[1] * 10_000 + key[2]
                 x = torch.tensor([vec_dict[i] for i in sorted(vec_dict)], dtype=torch.float32)
                 z = encoder(x.unsqueeze(0)).squeeze(0)
                 for idx, val in enumerate(z):
@@ -96,7 +110,11 @@ class SAEPipeline:
                             layer=latent_layer,
                             channel=idx,
                             tensor=[float(val)],
-                            context=ctx_by_key[(run_id, step)],
+                            prompt=meta_by_key[key]["prompt"],
+                            prompt_index=meta_by_key[key]["prompt_index"],
+                            token_index=meta_by_key[key]["token_index"],
+                            token=meta_by_key[key]["token"],
+                            context=ctx_by_key[key],
                             value_sum=float(val),
                             value_sq_sum=float(val * val),
                         )
