@@ -3,7 +3,7 @@ Targeted search over activations for quick “which latents fire on which tokens
 
 Examples:
   python -m interlatent.vis.search latents.db --layer-prefix latent: --token-like sky --top 20
-  python -m interlatent.vis.search latents.db --layer llm.layer.-1 --prompt-like hello --channel 0 --top 10
+  python -m interlatent.vis.search latents.db --layer llm.layer.20 --prompt-like hello --channel 0 --top 10
 """
 from __future__ import annotations
 

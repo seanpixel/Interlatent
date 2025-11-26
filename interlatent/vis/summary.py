@@ -185,7 +185,7 @@ def main():
     parser.add_argument("--top", type=int, default=10, help="Number of layers to include in the histogram.")
     parser.add_argument("--list-layers", action="store_true", help="List layers and row counts instead of histogram.")
     parser.add_argument("--layer-prefix", help="Filter layer listing by prefix (e.g., 'latent:' or 'latent_sae:').")
-    parser.add_argument("--layer-stats", help="Show stats/correlations for a specific layer (e.g., latent:llm.layer.-1).")
+    parser.add_argument("--layer-stats", help="Show stats/correlations for a specific layer (e.g., latent:llm.layer.20).")
     args = parser.parse_args()
 
     conn = _open_db(args.db)
