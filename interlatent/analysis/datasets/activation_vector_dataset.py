@@ -30,12 +30,18 @@ class ActivationVectorDataset(Dataset):
         if not events:
             raise ValueError(f"No activations found for layer '{layer}'")
 
-        grouped: Dict[Tuple[str, int], Dict[int, float]] = {}
-        ctx_by_key: Dict[Tuple[str, int], Dict] = {}
+        def key_for(ev):
+            # Prefer grouping by prompt/token if present; otherwise step.
+            if ev.prompt_index is not None and ev.token_index is not None:
+                return (ev.run_id, ev.prompt_index, ev.token_index)
+            return (ev.run_id, ev.step)
+
+        grouped: Dict[Tuple[str, int, int] | Tuple[str, int], Dict[int, float]] = {}
+        ctx_by_key: Dict[Tuple[str, int, int] | Tuple[str, int], Dict] = {}
         channels_seen: set[int] = set()
 
         for ev in events:
-            key = (ev.run_id, ev.step)
+            key = key_for(ev)
             grouped.setdefault(key, {})[ev.channel] = ev.value_sum if ev.value_sum is not None else sum(ev.tensor)
             channels_seen.add(ev.channel)
             if key not in ctx_by_key:

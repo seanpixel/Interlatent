@@ -133,27 +133,34 @@ class TranscoderPipeline:
         if not events:
             raise RuntimeError(
                 f"No activations found for layer '{self.layer}'. "
-                "Did you log with PrePostHookCtx?"
+                "Did you log with PrePostHookCtx or collect LLM activations?"
             )
-        
+
         # 2. Grab metrics from the post activations
         ctx_events = self.db.fetch_activations(layer=f"{self.layer}:post")
-        ctx_by_key = {
-            (ev.run_id, ev.step): (ev.context or {})
-            for ev in ctx_events
-            if ev.context and ev.context.get("metrics")
-        }
+        ctx_by_key = {}
+        for ev in ctx_events:
+            if ev.context and ev.context.get("metrics"):
+                ctx_by_key[(ev.run_id, ev.step)] = ev.context or {}
 
         # 3. group by (run_id, step)   →   {channel: scalar_sum}
-        grouped: Dict[Tuple[str, int], Dict[int, float]] = {}
+        grouped: Dict[Tuple[str, int, int] | Tuple[str, int], Dict[int, float]] = {}
+
+        def key_for(ev):
+            if ev.prompt_index is not None and ev.token_index is not None:
+                return (ev.run_id, ev.prompt_index, ev.token_index)
+            return (ev.run_id, ev.step)
+
         for ev in events:
-            key = (ev.run_id, ev.step)
+            key = key_for(ev)
             grouped.setdefault(key, {})[ev.channel] = ev.value_sum or sum(ev.tensor)
             ctx_by_key.setdefault(key, ev.context or {})
 
         # 4. push latent events
         with torch.no_grad():
-            for (run_id, step), vec_dict in grouped.items():
+            for key, vec_dict in grouped.items():
+                run_id = key[0]
+                step = key[1] if len(key) == 2 else key[1] * 10_000 + key[2]
                 # ordered vector by channel idx
                 x = torch.tensor(
                     [vec_dict[i] for i in sorted(vec_dict)], dtype=torch.float32

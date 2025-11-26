@@ -83,7 +83,7 @@ class LLMCollector:
         run_id = uuid.uuid4().hex
         run_info = RunInfo(run_id=run_id, env_name=getattr(model.config, "model_type", "llm"), tags=tags or {})
 
-        event_step = 0  # monotonically increasing step so PK uniqueness holds even with per-token events
+        event_step = 0  # monotonically increasing per-token step
 
         # simple batching over prompts
         for i in range(0, len(prompts), batch_size):
@@ -213,7 +213,7 @@ class LLMCollector:
                                     context=ctx,
                                 )
                             )
-                            event_step += 1
+                        event_step += 1
 
         self.db.flush()
         _LOG.info("LLM collection finished: %s (%d prompts)", run_id, len(prompts))
