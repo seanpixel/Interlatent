@@ -33,7 +33,7 @@ Interpret RL policies and HuggingFace LLMs by collecting activations, training s
 - Visualization: `interlatent.vis.summary`, `interlatent.vis.search`, `interlatent.vis.plot`
 
 ## Learn more
-See `GUIDE.md` for an extensive, step-by-step tutorial (setup, labeled prompts, training, visualization, limitations, and reproducible recipes).
+See [GUIDE.md](https://github.com/seanpixel/Interlatent/blob/main/GUIDE.md) for an extensive, step-by-step tutorial (setup, labeled prompts, training, visualization, limitations, and reproducible recipes).
 
 ## Motivation (short)
 Interlatent is built for hands-on interpretability: grab activations, attach labels/metrics, learn sparse representations, and quickly see which tokens/states drive them. It favors simplicity (SQLite, small scripts) over throughput, so you can iterate quickly on ideas.
