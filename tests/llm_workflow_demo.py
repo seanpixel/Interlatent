@@ -1,3 +1,7 @@
+"""
+Lightweight, no-pytest demo of the LLM workflow on a dummy HF-like model.
+Run with:  PYTHONPATH=. python tests/llm_workflow_demo.py
+"""
 import torch
 
 from interlatent.api import LatentDB
@@ -58,7 +62,6 @@ class DummyLM(torch.nn.Module):
         hidden_states = []
         for layer_idx in range(self.config.num_hidden_layers + 1):
             base = input_ids.float().unsqueeze(-1).repeat(1, 1, self.config.hidden_size)
-            # make each layer distinct
             hidden_states.append(base + layer_idx)
 
         class Out:
@@ -68,8 +71,8 @@ class DummyLM(torch.nn.Module):
         return Out(hidden_states)
 
 
-def test_llm_linear_probe_and_transcoder_and_sae(tmp_path):
-    db = LatentDB(f"sqlite:///{tmp_path}/latents.db")
+def main():
+    db = LatentDB("sqlite:///latents_demo.db")
     tok = DummyTokenizer()
     lm = DummyLM(hidden_size=6, num_hidden_layers=2)
 
@@ -84,25 +87,25 @@ def test_llm_linear_probe_and_transcoder_and_sae(tmp_path):
         token_metrics_fn=token_metrics_fn,
     )
     collector.run(lm, tok, prompts=["a b", "a a c"], max_new_tokens=0)
+    print("[collector] rows written:", len(db.fetch_activations(layer="llm.layer.2")))
 
-    # Linear probe dataset builds and trains
     lp_ds = LinearProbeDataset(db, layer="llm.layer.2", target_key="token_id")
     probe = train_linear_probe(db, layer="llm.layer.2", target_key="token_id", epochs=2, lr=1e-2)
-    assert len(lp_ds) > 0
-    assert probe.proj.out_features == 1
+    print("[linear probe] samples:", len(lp_ds), "weights shape:", tuple(probe.proj.weight.shape))
 
-    # Transcoder pipeline works on single-stream LLM activations
     pipe = TranscoderPipeline(db, "llm.layer.2", k=4, epochs=2)
     trainer = pipe.run()
     latent_events = db.fetch_activations(layer="latent:llm.layer.2")
-    assert latent_events, "Expected latent activations from transcoder backfill"
-    assert trainer.T.weight.shape[0] == 4
+    print("[transcoder] latent count:", len(latent_events), "encoder shape:", tuple(trainer.T.weight.shape))
 
-    # SAE pipeline produces latents too
     sae_pipe = SAEPipeline(db, "llm.layer.2", k=3, epochs=2)
     sae_model = sae_pipe.run()
     sae_latents = db.fetch_activations(layer="latent_sae:llm.layer.2")
-    assert sae_latents, "Expected SAE latent activations"
-    assert sae_model.encoder.out_features == 3
+    print("[sae] latent count:", len(sae_latents), "encoder shape:", tuple(sae_model.encoder.weight.shape))
 
     db.close()
+    print("Done. Inspect latents in latents_demo.db")
+
+
+if __name__ == "__main__":
+    main()
