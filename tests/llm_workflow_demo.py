@@ -8,7 +8,7 @@ from interlatent.api import LatentDB
 from interlatent.collectors.llm_collector import LLMCollector
 from interlatent.analysis.datasets import LinearProbeDataset
 from interlatent.analysis.train.linear_probe_trainer import train_linear_probe
-from interlatent.analysis.train.pipeline import TranscoderPipeline
+from interlatent.analysis.train.transcoder_pipeline import TranscoderPipeline
 from interlatent.analysis.train.sae_pipeline import SAEPipeline
 
 

@@ -4,6 +4,7 @@ Run manually: RUN_LLM_REAL=1 PYTHONPATH=. python tests/llm_real_model_demo.py
 Downloads weights; keep off in CI.
 """
 import os
+from pathlib import Path
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -12,7 +13,7 @@ from interlatent.api import LatentDB
 from interlatent.collectors.llm_collector import LLMCollector
 from interlatent.analysis.datasets import LinearProbeDataset
 from interlatent.analysis.train.linear_probe_trainer import train_linear_probe
-from interlatent.analysis.train.pipeline import TranscoderPipeline
+from interlatent.analysis.train.transcoder_pipeline import TranscoderPipeline
 from interlatent.analysis.train.sae_pipeline import SAEPipeline
 
 
@@ -30,7 +31,10 @@ def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     llm = AutoModelForCausalLM.from_pretrained(model_id).to(device)
 
-    db = LatentDB("sqlite:///latents_llm_real.db")
+    db_path = Path("latents_llm_real.db")
+    if db_path.exists():
+        db_path.unlink()  # fresh run to avoid mixing old step conventions
+    db = LatentDB(f"sqlite:///{db_path}")
 
     def token_metrics_fn(prompt_idx, token_idx, token, **_):
         return {"token_id": token["id"], "token_pos": token_idx}

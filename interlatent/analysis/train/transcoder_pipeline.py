@@ -1,5 +1,6 @@
-# interlatent/analysis/train/pipeline.py
 from __future__ import annotations
+
+# interlatent/analysis/train/transcoder_pipeline.py
 
 import datetime as _dt
 import os
@@ -11,7 +12,7 @@ from torch.utils.data import DataLoader
 
 from interlatent.analysis.datasets import ActivationPairDataset, ActivationVectorDataset
 from interlatent.schema import ActivationEvent, Artifact
-from interlatent.analysis.train.trainer import TranscoderTrainer
+from interlatent.analysis.train.transcoder_trainer import TranscoderTrainer
 
 
 class TranscoderPipeline:
@@ -119,9 +120,9 @@ class TranscoderPipeline:
 
     def _backfill_latents(self, encoder: torch.nn.Module):
         """
-        For every (run_id, step) pair in the *post* activations of the
-        target layer, run the encoder, then write one ActivationEvent
-        per latent channel with identical context.
+        For every (run_id, step/prompt, token) pair in the activations of the
+        target layer, run the encoder, then write one ActivationEvent per
+        latent channel with identical context.
         """
         latent_layer = f"latent:{self.layer}"
         encoder.eval()
@@ -143,7 +144,7 @@ class TranscoderPipeline:
             if ev.context and ev.context.get("metrics"):
                 ctx_by_key[(ev.run_id, ev.step)] = ev.context or {}
 
-        # 3. group by (run_id, step)   →   {channel: scalar_sum}
+        # 3. group by token or step  →   {channel: scalar_sum}
         grouped: Dict[Tuple[str, int, int] | Tuple[str, int], Dict[int, float]] = {}
 
         def key_for(ev):
@@ -160,6 +161,7 @@ class TranscoderPipeline:
         with torch.no_grad():
             for key, vec_dict in grouped.items():
                 run_id = key[0]
+                # derive a monotonic-ish step for (prompt_idx, token_idx)
                 step = key[1] if len(key) == 2 else key[1] * 10_000 + key[2]
                 # ordered vector by channel idx
                 x = torch.tensor(
@@ -175,7 +177,7 @@ class TranscoderPipeline:
                             layer=latent_layer,
                             channel=idx,
                             tensor=[float(val)],
-                            context=ctx_by_key[(run_id, step)],
+                            context=ctx_by_key[(key)],
                             value_sum=float(val),
                             value_sq_sum=float(val * val),
                         )
