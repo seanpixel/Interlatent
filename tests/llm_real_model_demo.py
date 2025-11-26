@@ -37,26 +37,26 @@ def main():
 
     collector = LLMCollector(
         db,
-        layer_indices=[-1],
+        layer_indices=[20],
         max_channels=128,
         device=device,
         token_metrics_fn=token_metrics_fn,
     )
     prompts = ["Hello world", "Why is the sky blue?"]
     collector.run(llm, tok, prompts=prompts, max_new_tokens=0, batch_size=1)
-    base_rows = len(db.fetch_activations(layer="llm.layer.-1"))
-    print(f"[collector] captured {base_rows} activations for layer llm.layer.-1")
+    base_rows = len(db.fetch_activations(layer="llm.layer.20"))
+    print(f"[collector] captured {base_rows} activations for layer llm.layer.20")
 
-    lp_ds = LinearProbeDataset(db, layer="llm.layer.-1", target_key="token_id")
-    probe = train_linear_probe(db, layer="llm.layer.-1", target_key="token_id", epochs=1, lr=1e-3, batch_size=16)
+    lp_ds = LinearProbeDataset(db, layer="llm.layer.20", target_key="token_id")
+    probe = train_linear_probe(db, layer="llm.layer.20", target_key="token_id", epochs=1, lr=1e-3, batch_size=16)
     print(f"[linear probe] samples={len(lp_ds)}, weight_shape={tuple(probe.proj.weight.shape)}")
 
-    pipe = TranscoderPipeline(db, "llm.layer.-1", k=8, epochs=1)
+    pipe = TranscoderPipeline(db, "llm.layer.20", k=8, epochs=1)
     trainer = pipe.run()
-    latent_events = db.fetch_activations(layer="latent:llm.layer.-1")
+    latent_events = db.fetch_activations(layer="latent:llm.layer.20")
     print(f"[transcoder] latent rows={len(latent_events)}, encoder_shape={tuple(trainer.T.weight.shape)}")
 
-    sae_pipe = SAEPipeline(db, "llm.layer.-1", k=8, epochs=1)
+    sae_pipe = SAEPipeline(db, "llm.layer.20", k=8, epochs=1)
     sae_model = sae_pipe.run()
     sae_latents = db.fetch_activations(layer="latent_sae:llm.layer.-1")
     print(f"[sae] latent rows={len(sae_latents)}, encoder_shape={tuple(sae_model.encoder.weight.shape)}")
