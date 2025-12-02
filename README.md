@@ -1,5 +1,5 @@
 # Interlatent
-Interpret RL policies and HuggingFace LLMs by collecting activations, training sparse latents (transcoders/SAEs), probing, and visualizing what fires on which tokens or states. Interlatent is a research toolkit—lightweight, SQLite-based, and aimed at small/medium-scale interpretability experiments rather than production pipelines.
+Interpret RL policies and LLMs by collecting activations, training sparse latents (transcoders/SAEs), probing, and visualizing what fires on which tokens or states. Interlatent is a research toolkit—lightweight, SQLite-based, and aimed at small/medium-scale interpretability experiments rather than production pipelines.
 
 ## What it does
 - **Collect**: Stream activations (with prompt/token metadata) from HF causal LMs or RL policies into a SQLite “LatentDB”.
