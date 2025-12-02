@@ -147,10 +147,12 @@ for sb in db.iter_statblocks(layer="latent:mlp_extractor.policy_net.0"):
 - **Real LLM demo**: `RUN_LLM_REAL=1 PYTHONPATH=. python tests/llm_real_model_demo.py` – collects from SmolLM-360M (or `LLM_MODEL`), trains probe/transcoder/SAE.
 - **Prompt labeling demo**: `PYTHONPATH=. python tests/prompt_dataset_demo.py` – builds benign/malignant prompt set, collects, trains probe/transcoder/SAE, runs searches.
 - **RL transcoder smoke**: `pytest -q tests/test_transcoder.py` – SB3 CartPole.
+- **Latent diff demo**: `PYTHONPATH=. python tests/latent_diff_demo.py` – builds two DBs (benign vs. harmful prompts) and diffs latent means across them.
 - **Visualization quickies**:
   - Summary: `python -m interlatent.vis.summary latents.db --list-layers --layer-prefix latent:`
   - Search: `python -m interlatent.vis.search latents.db --layer-prefix latent_sae: --token-like bomb --top 20`
   - Plot: `python -m interlatent.vis.plot latents.db --layer latent:llm.layer.20 --channel 0 --prompt-index 0`
+  - Diff: `python -m interlatent.vis.diff latents.db --layer-prefix latent: --channels 0 1 --prompt-like-a harmful --prompt-like-b benign`
 
 ---
 
