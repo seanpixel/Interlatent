@@ -22,14 +22,8 @@ def main():
     if os.environ.get("RUN_MINISTRAL3") != "1":
         print("Set RUN_MINISTRAL3=1 to run (downloads weights); skipping.")
         return
-
-    try:
-        from transformers import Mistral3ForConditionalGeneration, MistralCommonBackend
-    except Exception as exc:  # pragma: no cover - guard for missing deps
-        raise RuntimeError(
-            "Ministral-3 demo needs transformers>=4.57 and mistral_common installed.\n"
-            "Install with `pip install -U transformers mistral_common`."
-        ) from exc
+    
+    from transformers import Mistral3ForConditionalGeneration, MistralCommonBackend
 
     model_id = os.environ.get("LLM_MODEL", "mistralai/Ministral-3-14B-Instruct-2512")
     trust_remote_code = os.environ.get("HF_TRUST_REMOTE_CODE", "1") == "1"
