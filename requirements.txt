@@ -6,3 +6,4 @@ pytest==7.1.1
 stable_baselines3==2.7.0
 transformers==4.57.3
 "-e ."
+accelerate==1.12.0
