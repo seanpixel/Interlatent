@@ -23,13 +23,14 @@ def main():
         return
 
     model_id = os.environ.get("LLM_MODEL", "HuggingFaceTB/SmolLM-360M")
+    trust_remote_code = os.environ.get("HF_TRUST_REMOTE_CODE", "1") == "1"
     print(f"Loading model {model_id} ...")
-    tok = AutoTokenizer.from_pretrained(model_id)
+    tok = AutoTokenizer.from_pretrained(model_id, trust_remote_code=trust_remote_code)
     if tok.pad_token_id is None and getattr(tok, "eos_token", None):
         tok.pad_token = tok.eos_token
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    llm = AutoModelForCausalLM.from_pretrained(model_id).to(device)
+    llm = AutoModelForCausalLM.from_pretrained(model_id, trust_remote_code=trust_remote_code).to(device)
 
     db_path = Path("latents_llm_real.db")
     if db_path.exists():
