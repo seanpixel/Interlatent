@@ -8,4 +8,8 @@ pytest==7.1.1
 transformers==4.57.3
 accelerate>=0.26.0
 
+torch==2.9.1
+transformers==5.0.0.dev0
+
 -e .
+
