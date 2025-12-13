@@ -16,7 +16,7 @@ import csv
 import os
 import random
 from pathlib import Path
-from typing import Iterable, Tuple
+from typing import Tuple
 
 from datasets import load_dataset
 
@@ -36,13 +36,38 @@ CHARACTERS = {
 
 def pick_text(example: dict) -> Tuple[str, str]:
     """
-    Try to pick the text field from the daily_dilemmas schema.
+    Build the base prompt text from the daily_dilemmas schema provided.
+    Falls back to any non-empty string field if expected keys are missing.
     """
-    candidates = ["question", "prompt", "dilemma", "text", "instruction"]
-    for key in candidates:
-        if key in example and example[key]:
-            return str(example[key]), key
-    raise KeyError(f"None of the expected text fields {candidates} found in example: {example.keys()}")
+    parts = []
+    field_used = "structured"
+    # Expected keys in order: idx, dilemma_idx, basic_situation, dilemma_situation,
+    # action_type, action, negative_consequence, values_aggregated, topic, topic_group
+    for key in [
+        "basic_situation",
+        "dilemma_situation",
+        "action_type",
+        "action",
+        "negative_consequence",
+        "values_aggregated",
+        "topic_group",
+    ]:
+        val = example.get(key)
+        if val is None:
+            continue
+        if isinstance(val, list):
+            val = ", ".join(map(str, val))
+        parts.append(f"{key}: {val}")
+
+    if not parts:
+        # fallback to any string field
+        for k, v in example.items():
+            if isinstance(v, str) and v.strip():
+                return v, k
+        raise KeyError(f"No usable text fields in example keys {example.keys()}")
+
+    base_text = "\n".join(parts)
+    return base_text, field_used
 
 
 def rewrite_prompt(base_prompt: str, character_text: str, use_api: bool) -> str:
@@ -82,7 +107,14 @@ def build_dataset(split: str, n: int, seed: int, output: Path, use_api: bool) ->
                     "text": rewritten,
                     "label": label,
                     "character": label,
-                    "dilemma_id": idx,
+                    "dilemma_idx": ex.get("dilemma_idx", idx),
+                    "idx": ex.get("idx", idx),
+                    "action_type": ex.get("action_type"),
+                    "action": ex.get("action"),
+                    "negative_consequence": ex.get("negative_consequence"),
+                    "values_aggregated": ex.get("values_aggregated"),
+                    "topic": ex.get("topic"),
+                    "topic_group": ex.get("topic_group"),
                     "source_field": field_used,
                     "source_prompt": base_text,
                 }
@@ -92,7 +124,21 @@ def build_dataset(split: str, n: int, seed: int, output: Path, use_api: bool) ->
     with output.open("w", newline="") as f:
         writer = csv.DictWriter(
             f,
-            fieldnames=["text", "label", "character", "dilemma_id", "source_field", "source_prompt"],
+            fieldnames=[
+                "text",
+                "label",
+                "character",
+                "dilemma_idx",
+                "idx",
+                "action_type",
+                "action",
+                "negative_consequence",
+                "values_aggregated",
+                "topic",
+                "topic_group",
+                "source_field",
+                "source_prompt",
+            ],
         )
         writer.writeheader()
         writer.writerows(rows)
