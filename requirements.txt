@@ -11,5 +11,8 @@ accelerate>=0.26.0
 torch==2.9.1
 transformers==5.0.0.dev0
 
+mistral-common==1.8.6
+mistral-common[opencv]
+
 -e .
 
