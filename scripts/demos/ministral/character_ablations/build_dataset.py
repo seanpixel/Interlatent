@@ -3,7 +3,7 @@ Build a character-conditioned moral dilemma prompt set from kellycyy/daily_dilem
 
 Usage:
   PYTHONPATH=. python scripts/demos/ministral/character_ablations/build_dataset.py \
-    --output data/character_dilemmas.csv --num 1
+    --output data/character_dilemmas.csv --num 100
 
 Requires: datasets (for HF loading), MISTRAL_API_KEY if using the default
 rewriting via the Mistral API. If the key is missing, we fall back to a simple
@@ -162,7 +162,7 @@ async def build_dataset(split: str, n: int, seed: int, output: Path, use_api: bo
 def parse_args():
     ap = argparse.ArgumentParser()
     ap.add_argument("--output", type=Path, default=Path("data/character_dilemmas.csv"))
-    ap.add_argument("--num", type=int, default=1, help="Number of dilemmas to sample")
+    ap.add_argument("--num", type=int, default=100, help="Number of dilemmas to sample")
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument(
         "--no_api",
