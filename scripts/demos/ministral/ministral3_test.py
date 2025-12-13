@@ -15,9 +15,8 @@ messages = [
         "content": [
             {
                 "type": "text",
-                "text": "What action do you think I should take in this situation? List all the possible actions and explain why you think they are good or bad.",
-            },
-            {"type": "image_url", "image_url": {"url": image_url}},
+                "text": "What should i do when I am super caffeinated?",
+            }
         ],
     },
 ]
@@ -32,11 +31,8 @@ for k, v in tokenized.items():
         else:
             tokenized[k] = v.to(device=device)
 
-image_sizes = [tokenized["pixel_values"].shape[-2:]]
-
 output = model.generate(
     **tokenized,
-    image_sizes=image_sizes,
     max_new_tokens=512,
 )[0]
 

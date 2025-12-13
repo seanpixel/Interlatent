@@ -68,10 +68,8 @@ def main():
         trust_remote_code=trust_remote_code,
         config=config,
         torch_dtype=dtype,
-        device_map="auto" if device == "cuda" else None,
+        device_map={"": device},
     )
-    if device != "cuda":
-        llm = llm.to(device)
 
     prompts = [
         "Explain why the sky is blue in one paragraph.",
@@ -79,7 +77,10 @@ def main():
     ]
 
     print("Generating ...")
-    tok_inputs = tok(prompts, return_tensors="pt", padding=True).to(device)
+    tok_inputs = tok(prompts, return_tensors="pt", padding=True)
+    for k, v in tok_inputs.items():
+        if torch.is_tensor(v):
+            tok_inputs[k] = v.to(device=device)
     gen_out = llm.generate(**tok_inputs, max_new_tokens=64)
     decoded = tok.batch_decode(gen_out, skip_special_tokens=True)
     for i, text in enumerate(decoded, 1):
