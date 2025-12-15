@@ -26,7 +26,7 @@ See [GUIDE.md](GUIDE.md) for the longer walkthrough (setup, labeled prompts, tra
 
 ---
 
-## 7) Practical Tips
+## Practical Tips
 - **Channel caps**: Use `max_channels` in `LLMCollector` to avoid massive DBs on large models.
 - **Prompt lengths**: `LLMCollector` respects attention masks; ensure padding tokens are set on the tokenizer.
 - **Fresh DBs**: Delete old SQLite files between runs to avoid mixing schema/step conventions.
@@ -36,7 +36,7 @@ See [GUIDE.md](GUIDE.md) for the longer walkthrough (setup, labeled prompts, tra
 
 ---
 
-## 8) Limitations / Non-goals
+## Limitations / Non-goals
 - **Scale**: SQLite is great for small/medium runs; not intended for billion-token traces. For very large runs, you’ll need a different backend.
 - **Latency**: Collectors are synchronous and unoptimized for throughput; they are research-oriented, not production pipelines.
 - **Model coverage**: Only causal LMs are handled in `LLMCollector`; encoder-only or seq2seq models would need small adaptations.
@@ -47,7 +47,7 @@ See [GUIDE.md](GUIDE.md) for the longer walkthrough (setup, labeled prompts, tra
 
 ---
 
-## 9) Extending / Custom Ideas
+## Extending / Custom Ideas
 - Add your own metric functions to `LLMCollector` (e.g., entropy, toxicity scores) and surface them via `token_metrics_fn`.
 - Swap dummy LLM for your HF model; adjust `max_channels` and layer indices as needed.
 - For sequence-level probes, aggregate token activations (e.g., mean-pool per prompt) before training probes.
@@ -55,7 +55,7 @@ See [GUIDE.md](GUIDE.md) for the longer walkthrough (setup, labeled prompts, tra
 
 ---
 
-## 10) Minimal Code Skeletons
+## Minimal Code Skeletons
 **Collector with labels:**
 ```python
 ds = PromptDataset.from_pairs(texts, labels)
@@ -80,7 +80,3 @@ SAEPipeline(db, "llm.layer.20", k=8).run()
 python -m interlatent.vis.search latents.db --layer-prefix latent: --token-like bomb --top 10
 python -m interlatent.vis.plot latents.db --layer latent:llm.layer.20 --channel 0 --prompt-index 0
 ```
-
----
-
-You now have the pieces to collect activations, label prompts, train sparse latents and probes, and visualize which tokens or environment states drive them. Happy digging!
