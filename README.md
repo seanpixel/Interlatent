@@ -1,3 +1,5 @@
+# Interlatent
+
 Interlatent is a lightweight interpretability toolkit: collect activations with context, attach labels, learn sparse latents (transcoders/SAEs) and probes, and quickly see which tokens or states drive them. The philosophy is to stay close to the model’s internal signals—log, label, compress, and visualize—so you can iterate on ideas rather than build production pipelines. It uses SQLite and small scripts by design, aimed at small/medium-scale experiments.
 
 ## Use It Quickly
