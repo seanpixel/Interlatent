@@ -65,7 +65,7 @@ def aggregate(events) -> Tuple[np.ndarray, List[int]]:
 
     labels = sorted(labels_seen)
     num_channels = max_channel + 1
-    mat = np.zeros((num_channels, len(labels)), dtype=np.float32)
+    mat = np.zeros((num_channels, len(labels)), dtype=float)
 
     for li, label in enumerate(labels):
         for ch in range(num_channels):
@@ -93,7 +93,7 @@ def plot_heatmap(mat: np.ndarray, labels: List[int], output: Path):
 def report_variation(mat: np.ndarray, labels: List[int], top_k: int = 10):
     # Variation across characters per channel: max - min
     var = mat.max(axis=1) - mat.min(axis=1)
-    top_idx = np.argsort(-var)[:top_k]
+    top_idx = np.argsort(var * -1)[:top_k]
     lines = []
     for ch in top_idx:
         lines.append(
@@ -107,7 +107,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--db", type=Path, required=True, help="Path to LatentDB sqlite file")
     ap.add_argument("--layer", type=str, default="latent_sae:llm.layer.20", help="Layer name in DB")
-    ap.add_argument("--output", type=Path, default=Path("figs/character_latents.png"))
+    ap.add_argument("--output", type=Path, default=Path("vis/character_latents.png"))
     ap.add_argument("--topk", type=int, default=10)
     args = ap.parse_args()
 
