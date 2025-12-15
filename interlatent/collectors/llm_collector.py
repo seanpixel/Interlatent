@@ -51,6 +51,7 @@ class LLMCollector:
         device: str | torch.device | None = None,
         token_metrics_fn=None,
         prompt_context_fn=None,
+        log_every_prompts: int | None = None,
     ):
         self.db = db
         self.layer_indices = list(layer_indices) if layer_indices is not None else [-1]
@@ -58,6 +59,7 @@ class LLMCollector:
         self.device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
         self.token_metrics_fn = token_metrics_fn
         self.prompt_context_fn = prompt_context_fn
+        self.log_every_prompts = log_every_prompts
 
     # ------------------------------------------------------------------
     def run(
@@ -86,6 +88,8 @@ class LLMCollector:
         run_info = RunInfo(run_id=run_id, env_name=getattr(model.config, "model_type", "llm"), tags=tags or {})
 
         event_step = 0  # monotonically increasing per-token step
+        processed_prompts = 0
+        next_log = self.log_every_prompts or 0
 
         # simple batching over prompts
         for i in range(0, len(prompts), batch_size):
@@ -227,6 +231,16 @@ class LLMCollector:
                                 )
                             )
                         event_step += 1
+
+                    processed_prompts += 1
+                    if self.log_every_prompts and processed_prompts >= next_log:
+                        _LOG.info(
+                            "LLMCollector progress: %d/%d prompts processed (run_id=%s)",
+                            processed_prompts,
+                            len(prompts),
+                            run_id,
+                        )
+                        next_log += self.log_every_prompts
 
         self.db.flush()
         _LOG.info("LLM collection finished: %s (%d prompts)", run_id, len(prompts))

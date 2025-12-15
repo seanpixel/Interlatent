@@ -68,6 +68,7 @@ def collect(db: LatentDB, tok, llm, dataset: PromptDataset, layer: str, device: 
         device=device,
         prompt_context_fn=dataset.prompt_context_fn(),
         token_metrics_fn=dataset.token_metrics_fn(metric_name="prompt_label"),
+        log_every_prompts=5,
     )
     print("[collect] Starting collection...")
     collector.run(
