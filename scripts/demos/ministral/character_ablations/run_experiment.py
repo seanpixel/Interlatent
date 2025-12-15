@@ -130,7 +130,7 @@ def parse_args():
     ap = argparse.ArgumentParser()
     ap.add_argument("--csv", type=Path, required=True, help="CSV with text/label columns (character rewrites).")
     ap.add_argument("--model", type=str, default="mistralai/Ministral-3-14B-Instruct-2512")
-    ap.add_argument("--layer", type=str, default="llm.layer.20")
+    ap.add_argument("--layer", type=str, default="llm.layer.8")
     ap.add_argument("--db", type=str, default="latents_character_dilemmas.db")
     ap.add_argument("--probe_epochs", type=int, default=1)
     ap.add_argument("--transcoder_k", type=int, default=8)

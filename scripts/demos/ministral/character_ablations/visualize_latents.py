@@ -45,10 +45,11 @@ def extract_label(ev) -> int | None:
         return None
 
 
-def aggregate(events) -> Tuple[np.ndarray, List[int]]:
+def aggregate(events) -> Tuple[np.ndarray, np.ndarray, List[int]]:
     # Collect per label per channel sums/counts
     sums: Dict[int, Dict[int, float]] = defaultdict(lambda: defaultdict(float))
     counts: Dict[int, Dict[int, int]] = defaultdict(lambda: defaultdict(int))
+    sumsq: Dict[int, Dict[int, float]] = defaultdict(lambda: defaultdict(float))
     max_channel = 0
     labels_seen = set()
 
@@ -62,18 +63,27 @@ def aggregate(events) -> Tuple[np.ndarray, List[int]]:
         val = ev.value_sum if ev.value_sum is not None else (ev.tensor[0] if ev.tensor else 0.0)
         sums[label][ch] += float(val)
         counts[label][ch] += 1
+        sumsq[label][ch] += float(val * val)
 
     labels = sorted(labels_seen)
     num_channels = max_channel + 1
+    if not labels:
+        raise RuntimeError("No labels found in activations; check prompt_label metric.")
+
     mat = np.zeros((num_channels, len(labels)), dtype=float)
+    stds = np.zeros((num_channels, len(labels)), dtype=float)
 
     for li, label in enumerate(labels):
         for ch in range(num_channels):
             if counts[label][ch] > 0:
-                mat[ch, li] = sums[label][ch] / counts[label][ch]
+                mean = sums[label][ch] / counts[label][ch]
+                var = (sumsq[label][ch] / counts[label][ch]) - mean * mean
+                mat[ch, li] = mean
+                stds[ch, li] = math.sqrt(max(var, 1e-8))
             else:
                 mat[ch, li] = 0.0
-    return mat, labels
+                stds[ch, li] = 0.0
+    return mat, stds, labels
 
 
 def plot_heatmap(mat: np.ndarray, labels: List[int], output: Path):
@@ -86,18 +96,20 @@ def plot_heatmap(mat: np.ndarray, labels: List[int], output: Path):
     plt.title("Mean activation per channel per character")
     output.parent.mkdir(parents=True, exist_ok=True)
     plt.tight_layout()
-    plt.savefig(output, dpi=200)
+    plt.savefig(output, dpi=200, bbox_inches="tight")
     plt.close()
 
 
-def report_variation(mat: np.ndarray, labels: List[int], top_k: int = 10):
-    # Variation across characters per channel: max - min
-    var = mat.max(axis=1) - mat.min(axis=1)
-    top_idx = np.argsort(var * -1)[:top_k]
+def report_variation(mat: np.ndarray, labels: List[int], stds: np.ndarray, top_k: int = 10):
+    # Variation across characters per channel: max - min and normalized by pooled std
+    spread = mat.max(axis=1) - mat.min(axis=1)
+    pooled_std = stds.mean(axis=1)
+    norm = np.divide(spread, pooled_std + 1e-8)
+    top_idx = np.argsort(-norm)[:top_k]
     lines = []
     for ch in top_idx:
         lines.append(
-            f"ch {ch:4d} | spread {var[ch]:.4f} | means " +
+            f"ch {ch:4d} | spread {spread[ch]:.4f} | spread/std {norm[ch]:.2f} | means " +
             " ".join(f"{lab}:{mat[ch, i]:.3f}" for i, lab in enumerate(labels))
         )
     return lines
@@ -112,13 +124,14 @@ def main():
     args = ap.parse_args()
 
     events = load_events(args.db, args.layer)
-    mat, labels = aggregate(events)
+    mat, stds, labels = aggregate(events)
     if mat.size == 0:
         raise RuntimeError("No activations aggregated; check labels/metrics.")
 
+    print(f"[viz] Aggregated matrix shape: {mat.shape} (channels x labels={len(labels)})")
     plot_heatmap(mat, labels, args.output)
     print(f"[viz] Saved heatmap to {args.output}")
-    lines = report_variation(mat, labels, top_k=args.topk)
+    lines = report_variation(mat, labels, stds, top_k=args.topk)
     print("[viz] Top varying channels (max-min spread across characters):")
     for line in lines:
         print("  " + line)
