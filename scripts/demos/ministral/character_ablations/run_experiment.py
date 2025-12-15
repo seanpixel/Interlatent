@@ -24,7 +24,6 @@ Notes:
 from __future__ import annotations
 
 import argparse
-import json
 import os
 from pathlib import Path
 from typing import List
@@ -62,40 +61,21 @@ def load_model_and_tokenizer(model_id: str, trust_remote_code: bool):
 
 
 def collect(db: LatentDB, tok, llm, dataset: PromptDataset, layer: str, device: str):
-    # Store completions as an artifact to inspect style differences
-    completions_path = Path("completions_character_dilemmas.jsonl")
-    with completions_path.open("w") as outf:
-        def on_output(prompt_idx: int, prompt: str, output: str):
-            ex = dataset.examples[prompt_idx]
-            json.dump(
-                {
-                    "prompt_idx": prompt_idx,
-                    "prompt": prompt,
-                    "label": ex.label,
-                    "meta": ex.meta,
-                    "output": output,
-                },
-                outf,
-            )
-            outf.write("\n")
-
-        collector = LLMCollector(
-            db,
-            layer_indices=[int(layer.split(".")[-1]) if layer.startswith("llm.layer.") else layer],
-            max_channels=128,
-            device=device,
-            prompt_context_fn=dataset.prompt_context_fn(),
-            token_metrics_fn=dataset.token_metrics_fn(metric_name="prompt_label"),
-            on_output=on_output,
-        )
-        collector.run(
-            llm,
-            tok,
-            prompts=dataset.texts,
-            max_new_tokens=64,
-            batch_size=1,
-        )
-    db.add_artifact("completions", str(completions_path))
+    collector = LLMCollector(
+        db,
+        layer_indices=[int(layer.split(".")[-1]) if layer.startswith("llm.layer.") else layer],
+        max_channels=128,
+        device=device,
+        prompt_context_fn=dataset.prompt_context_fn(),
+        token_metrics_fn=dataset.token_metrics_fn(metric_name="prompt_label"),
+    )
+    collector.run(
+        llm,
+        tok,
+        prompts=dataset.texts,
+        max_new_tokens=64,
+        batch_size=1,
+    )
 
 
 def run(args):
