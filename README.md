@@ -16,6 +16,11 @@ ds = PromptDataset([
 ])
 
 # 2) Collect activations
+from transformers import AutoModelForCausalLM, AutoTokenizer
+model_id = "HuggingFaceTB/SmolLM-360M"
+tokenizer = AutoTokenizer.from_pretrained(model_id)
+llm = AutoModelForCausalLM.from_pretrained(model_id)
+
 db = LatentDB("sqlite:///latents_llm.db")
 collector = LLMCollector(
     db,
