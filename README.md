@@ -1,6 +1,6 @@
 # Interlatent
 
-Interlatent is a lightweight interpretability toolkit: collect activations with context, attach labels, learn sparse latents (transcoders/SAEs) and probes, and quickly see which tokens or states drive them. The philosophy is to stay close to the model’s internal signals—log, label, compress, and visualize—so you can iterate on ideas rather than build production pipelines. It uses SQLite and small scripts by design, aimed at small/medium-scale experiments.
+Interlatent is a lightweight interpretability toolkit where you can: collect activations with context, attach labels, learn sparse latents (transcoders/SAEs) and probes, and quickly see which tokens or states drive them. The goal is to allow new independent researchers / engineers to dabble with understanding their models. It uses SQLite and small scripts by design, aimed at small/medium-scale experiments.
 
 ## Use It Quickly
 - LLM workflow demo (no downloads): `PYTHONPATH=. python scripts/demos/ministral/llm_workflow_demo.py`
