@@ -28,10 +28,10 @@ from utils import generate
 
 
 CHARACTERS = {
-    "ch1": ch_1,
-    "ch2": ch_2,
-    "ch3": ch_3,
-    "ch4": ch_4,
+    0: ch_1,
+    1: ch_2,
+    2: ch_3,
+    3: ch_4,
 }
 
 
@@ -43,30 +43,7 @@ def pick_text(example: dict) -> Tuple[str, str]:
     if example.get("dilemma_situation"):
         return str(example["dilemma_situation"]), "dilemma_situation"
 
-    parts = []
-    for key in [
-        "basic_situation",
-        "action_type",
-        "action",
-        "negative_consequence",
-        "values_aggregated",
-        "topic_group",
-    ]:
-        val = example.get(key)
-        if val is None:
-            continue
-        if isinstance(val, list):
-            val = ", ".join(map(str, val))
-        parts.append(f"{key}: {val}")
-
-    if parts:
-        return "\n".join(parts), "fallback_structured"
-
-    # ultimate fallback: any string field
-    for k, v in example.items():
-        if isinstance(v, str) and v.strip():
-            return v, k
-    raise KeyError(f"No usable text fields in example keys {example.keys()}")
+    raise KeyError("dilemma_situation missing; expected field not found.")
 
 
 def rewrite_prompt(base_prompt: str, character_text: str, use_api: bool) -> str:
@@ -104,12 +81,12 @@ async def build_dataset(split: str, n: int, seed: int, output: Path, use_api: bo
     for idx in indices:
         ex = ds[int(idx)]
         base_text, field_used = pick_text(ex)
-        tasks = []
+        rewrites = []
         for label, character in CHARACTERS.items():
-            tasks.append(
-                rewrite_prompt_async(base_text, character, use_api=use_api)
-            )
-        rewrites = await asyncio.gather(*tasks)
+            # Respect ~1 rps API rate limit
+            if use_api and os.environ.get("MISTRAL_API_KEY"):
+                await asyncio.sleep(1.05)
+            rewrites.append(await rewrite_prompt_async(base_text, character, use_api=use_api))
 
         for (label, _), rewritten in zip(CHARACTERS.items(), rewrites):
             rows.append(
@@ -117,16 +94,6 @@ async def build_dataset(split: str, n: int, seed: int, output: Path, use_api: bo
                     "text": rewritten,
                     "label": label,
                     "character": label,
-                    "dilemma_idx": ex.get("dilemma_idx", idx),
-                    "idx": ex.get("idx", idx),
-                    "action_type": ex.get("action_type"),
-                    "action": ex.get("action"),
-                    "negative_consequence": ex.get("negative_consequence"),
-                    "values_aggregated": ex.get("values_aggregated"),
-                    "topic": ex.get("topic"),
-                    "topic_group": ex.get("topic_group"),
-                    "source_field": field_used,
-                    "source_prompt": base_text,
                 }
             )
 
@@ -138,16 +105,6 @@ async def build_dataset(split: str, n: int, seed: int, output: Path, use_api: bo
                 "text",
                 "label",
                 "character",
-                "dilemma_idx",
-                "idx",
-                "action_type",
-                "action",
-                "negative_consequence",
-                "values_aggregated",
-                "topic",
-                "topic_group",
-                "source_field",
-                "source_prompt",
             ],
         )
         writer.writeheader()

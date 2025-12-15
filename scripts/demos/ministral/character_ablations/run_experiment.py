@@ -69,6 +69,7 @@ def collect(db: LatentDB, tok, llm, dataset: PromptDataset, layer: str, device: 
         prompt_context_fn=dataset.prompt_context_fn(),
         token_metrics_fn=dataset.token_metrics_fn(metric_name="prompt_label"),
     )
+    print("[collect] Starting collection...")
     collector.run(
         llm,
         tok,
@@ -76,6 +77,7 @@ def collect(db: LatentDB, tok, llm, dataset: PromptDataset, layer: str, device: 
         max_new_tokens=64,
         batch_size=1,
     )
+    print("[collect] Done.")
 
 
 def run(args):
@@ -87,7 +89,9 @@ def run(args):
     print(f"Loaded {len(dataset.examples)} prompts from {args.csv}")
 
     trust_remote_code = os.environ.get("HF_TRUST_REMOTE_CODE", "1") == "1"
+    print("[load] Loading model and tokenizer...")
     tok, llm, device = load_model_and_tokenizer(args.model, trust_remote_code)
+    print(f"[load] Model on {device}")
 
     db_path = Path(args.db)
     if db_path.exists():
@@ -99,16 +103,19 @@ def run(args):
     print(f"[collector] captured {base_rows} activations for layer {args.layer}")
 
     lp_ds = LinearProbeDataset(db, layer=args.layer, target_key="prompt_label")
+    print("[probe] Training linear probe...")
     probe = train_linear_probe(
         db, layer=args.layer, target_key="prompt_label", epochs=args.probe_epochs, lr=1e-3, batch_size=16
     )
     print(f"[linear probe] samples={len(lp_ds)}, weight_shape={tuple(probe.proj.weight.shape)}")
 
+    print("[transcoder] Training...")
     pipe = TranscoderPipeline(db, args.layer, k=args.transcoder_k, epochs=args.transcoder_epochs)
     trainer = pipe.run()
     latent_events = db.fetch_activations(layer=f"latent:{args.layer}")
     print(f"[transcoder] latent rows={len(latent_events)}, encoder_shape={tuple(trainer.T.weight.shape)}")
 
+    print("[sae] Training...")
     sae_pipe = SAEPipeline(db, args.layer, k=args.sae_k, epochs=args.sae_epochs)
     sae_model = sae_pipe.run()
     sae_latents = db.fetch_activations(layer=f"latent_sae:{args.layer}")
