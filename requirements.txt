@@ -2,15 +2,15 @@ gymnasium==1.2.2
 stable_baselines3==2.7.0
 
 matplotlib==3.6.0
-pydantic==1.10.5
+pydantic==2.12.5
 pytest==7.1.1
 
 datasets==4.4.1
-transformers==4.57.3
+git+https://github.com/huggingface/transformers
 accelerate>=0.26.0
 
 torch==2.9.1
-transformers==5.0.0.dev0
+torchvision==0.24.1
 
 mistral-common==1.8.6
 mistral-common[opencv]
