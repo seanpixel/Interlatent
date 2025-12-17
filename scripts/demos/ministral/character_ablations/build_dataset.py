@@ -69,7 +69,7 @@ def rewrite_prompt(base_prompt: str, character_text: str, use_api: bool) -> str:
     Falls back to a simple templated prefix if the API key is absent or errors.
     """
     template = (
-        "Rewrite the following prompt in the style of the character below without changing the meaning. "
+        "Rewrite the following prompt in the style of the character below without changing the meaning. Output only the rewritten prompt.\n"
         "Do not add or remove content beyond stylistic changes. Return the rewritten prompt only.\n"
         f"character:\n{character_text}\n"
         f"prompt:\n{base_prompt}"
