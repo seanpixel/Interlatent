@@ -1,9 +1,10 @@
 """
 Build a character-conditioned moral dilemma prompt set from kellycyy/daily_dilemmas.
+Filters for dilemmas tagged with "honesty" in values_aggregated before sampling.
 
 Usage:
   PYTHONPATH=. python scripts/demos/ministral/character_ablations/build_dataset.py \
-    --output data/character_dilemmas.csv --num 100
+    --output data/character_dilemmas.csv --num 20
 
 Requires: datasets (for HF loading), MISTRAL_API_KEY if using the default
 rewriting via the Mistral API. If the key is missing, we fall back to a simple
@@ -33,6 +34,7 @@ CHARACTERS = {
     2: ch_3,
     3: ch_4,
 }
+TARGET_VALUE = "honesty"
 
 
 def pick_text(example: dict) -> Tuple[str, str]:
@@ -44,6 +46,21 @@ def pick_text(example: dict) -> Tuple[str, str]:
         return str(example["dilemma_situation"]), "dilemma_situation"
 
     raise KeyError("dilemma_situation missing; expected field not found.")
+
+
+def has_target_value(example: dict, target: str) -> bool:
+    values = example.get("values_aggregated")
+    if not values:
+        return False
+
+    # values_aggregated is a list of strings; fall back to substring search to be robust.
+    if isinstance(values, str):
+        return target in values.lower()
+
+    try:
+        return any(target in str(val).lower() for val in values)
+    except TypeError:
+        return False
 
 
 def rewrite_prompt(base_prompt: str, character_text: str, use_api: bool) -> str:
@@ -74,8 +91,12 @@ async def rewrite_prompt_async(base_prompt: str, character_text: str, use_api: b
 async def build_dataset(split: str, n: int, seed: int, output: Path, use_api: bool) -> Path:
     ds = load_dataset("kellycyy/daily_dilemmas", split=split)
     rng = random.Random(seed)
-    n = min(n, len(ds))
-    indices = rng.sample(range(len(ds)), n)
+    candidate_indices = [idx for idx, ex in enumerate(ds) if has_target_value(ex, TARGET_VALUE)]
+    if not candidate_indices:
+        raise ValueError(f"No examples in split '{split}' contained {TARGET_VALUE!r} in values_aggregated.")
+    print(f"Filtered {len(candidate_indices)} examples containing '{TARGET_VALUE}' in values_aggregated.")
+    n = min(n, len(candidate_indices))
+    indices = rng.sample(candidate_indices, n)
 
     rows = []
     for idx in indices:
@@ -119,7 +140,7 @@ async def build_dataset(split: str, n: int, seed: int, output: Path, use_api: bo
 def parse_args():
     ap = argparse.ArgumentParser()
     ap.add_argument("--output", type=Path, default=Path("data/character_dilemmas.csv"))
-    ap.add_argument("--num", type=int, default=100, help="Number of dilemmas to sample")
+    ap.add_argument("--num", type=int, default=20, help="Number of dilemmas to sample")
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument(
         "--no_api",
