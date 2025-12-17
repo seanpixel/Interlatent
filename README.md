@@ -1,6 +1,12 @@
 # Interlatent
 
-Interlatent is a lightweight interpretability toolkit where you can: save prompts and activations in an SQL database with context, attach labels, learn sparse latents (transcoders/SAEs) and probes, and quickly see which tokens or states drive them. The goal is to allow new independent researchers / engineers to dabble with understanding their models. It uses SQLite and small scripts by design, aimed at small/medium-scale experiments.
+Interlatent is a lightweight interpretability toolkit where you can: save prompts and activations in an SQL database with context, attach labels, learn sparse latents (transcoders/SAEs) and probes, and quickly see which tokens or states drive them. The goal is to allow new independent researchers / engineers to dabble with understanding their models. It uses SQLite and small scripts by design, aimed at small/medium-scale experiments. We are still in development phase and contributions are welcome.
+
+## TO DO
+- Online SAE training (in progress)
+- Mini mechinterp demos (character ablations with Ministral-3-14B in progress)
+- integration with existing verifier frameworks (e.g. [PI Verifiers](https://github.com/PrimeIntellect-ai/verifiers))
+- Implement batched activations for lower I/O cost, reduce round-trips (for bigger runs in future)
 
 ## Smallest End-to-End Example (LLM)
 ```python
