@@ -311,9 +311,10 @@ def main():
     lengths: Dict[int, int] = {}
 
     with torch.no_grad():
+        enc_dtype = next(encoder.parameters()).dtype
         for label in sorted(CHARACTERS.keys()):
             L = int(lengths_list[label])
-            x = layer_tensor[label, :L, :sae_in_dim].to(device)  # (S, H_sae)
+            x = layer_tensor[label, :L, :sae_in_dim].to(device=device, dtype=enc_dtype)  # (S, H_sae)
             z = encoder(x).T  # (K, S)
             latents_by_label[label] = z.float().cpu().numpy()
             tokens_by_label[label] = decoded_tokens[label][:L]
