@@ -185,6 +185,9 @@ def plot_latents(
 
 def summarize_to_csv(
     out_csv: Path,
+    *,
+    base_prompt: str,
+    rewritten_prompts: Dict[int, str],
     latents_by_label: Dict[int, np.ndarray],
     tokens_by_label: Dict[int, List[str]],
     lengths: Dict[int, int],
@@ -195,6 +198,8 @@ def summarize_to_csv(
             f,
             fieldnames=[
                 "character",
+                "base_prompt",
+                "rewritten_prompt",
                 "latent",
                 "mean",
                 "std",
@@ -214,6 +219,8 @@ def summarize_to_csv(
                 w.writerow(
                     {
                         "character": label,
+                        "base_prompt": base_prompt,
+                        "rewritten_prompt": rewritten_prompts.get(label, ""),
                         "latent": latent_idx,
                         "mean": float(row.mean()),
                         "std": float(row.std()),
@@ -245,6 +252,49 @@ def print_cli_summary(latents_by_label: Dict[int, np.ndarray], lengths: Dict[int
         print(f"  latent {ch:3d} | spread {spread[ch]:.4f} | spread/std {norm[ch]:.2f} | means {mean_str}")
 
 
+def write_token_latents_csv(
+    out_csv: Path,
+    *,
+    base_prompt: str,
+    rewritten_prompts: Dict[int, str],
+    latents_by_label: Dict[int, np.ndarray],
+    tokens_by_label: Dict[int, List[str]],
+    lengths: Dict[int, int],
+):
+    """
+    Write a token-level CSV: one row per (character, token), with all latent values.
+    This is typically the most useful view for inspecting "what tokens light up a latent".
+    """
+    out_csv.parent.mkdir(parents=True, exist_ok=True)
+    k = next(iter(latents_by_label.values())).shape[0]
+    fieldnames = [
+        "character",
+        "base_prompt",
+        "rewritten_prompt",
+        "token_index",
+        "token",
+    ] + [f"latent_{i}" for i in range(k)]
+
+    with out_csv.open("w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=fieldnames)
+        w.writeheader()
+        for label, z in sorted(latents_by_label.items()):
+            L = lengths[label]
+            toks = tokens_by_label[label][:L]
+            z = z[:, :L]  # (K, L)
+            for t in range(L):
+                row = {
+                    "character": label,
+                    "base_prompt": base_prompt,
+                    "rewritten_prompt": rewritten_prompts.get(label, ""),
+                    "token_index": t,
+                    "token": toks[t] if t < len(toks) else "",
+                }
+                for i in range(k):
+                    row[f"latent_{i}"] = float(z[i, t])
+                w.writerow(row)
+
+
 def parse_args():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", type=str, default="mistralai/Ministral-3-14B-Instruct-2512")
@@ -257,6 +307,12 @@ def parse_args():
     ap.add_argument("--no_api", action="store_true", help="Skip Mistral API rewrite and use a templated prefix instead.")
     ap.add_argument("--out_png", type=Path, default=Path("vis/single_example_sae.png"))
     ap.add_argument("--out_csv", type=Path, default=Path("vis/single_example_sae.csv"))
+    ap.add_argument(
+        "--out_tokens_csv",
+        type=Path,
+        default=Path("vis/single_example_sae_tokens.csv"),
+        help="Token-level CSV containing all latent activations per token.",
+    )
     ap.add_argument("--topk", type=int, default=10)
     return ap.parse_args()
 
@@ -284,8 +340,19 @@ def main():
         print(f"[data] Chose dataset index {chosen} from {len(candidates)} candidates in split {args.split}")
 
     prompts: List[str] = []
+    prompts_by_label: Dict[int, str] = {}
     for label, character in CHARACTERS.items():
-        prompts.append(rewrite_prompt(base, character, use_api=not args.no_api))
+        rewritten = rewrite_prompt(base, character, use_api=not args.no_api)
+        prompts.append(rewritten)
+        prompts_by_label[label] = rewritten
+
+    print("\n[prompt] Base prompt:")
+    print(base)
+    print("\n[prompt] Rewritten prompts:")
+    for label in sorted(prompts_by_label.keys()):
+        print(f"\n  character {label}:")
+        print(prompts_by_label[label])
+    print()
 
     trust_remote_code = os.environ.get("HF_TRUST_REMOTE_CODE", "1") == "1"
     tok, llm, device = load_model_and_tokenizer(args.model, trust_remote_code)
@@ -322,10 +389,27 @@ def main():
 
     title = f"SAE latents for one example @ layer {args.layer} (k={next(iter(latents_by_label.values())).shape[0]})"
     plot_latents(latents_by_label, lengths, args.out_png, title=title)
-    summarize_to_csv(args.out_csv, latents_by_label, tokens_by_label, lengths)
+    summarize_to_csv(
+        args.out_csv,
+        base_prompt=base,
+        rewritten_prompts=prompts_by_label,
+        latents_by_label=latents_by_label,
+        tokens_by_label=tokens_by_label,
+        lengths=lengths,
+    )
+    write_token_latents_csv(
+        args.out_tokens_csv,
+        base_prompt=base,
+        rewritten_prompts=prompts_by_label,
+        latents_by_label=latents_by_label,
+        tokens_by_label=tokens_by_label,
+        lengths=lengths,
+    )
 
     print(f"[out] Wrote {args.out_png}")
     print(f"[out] Wrote {args.out_csv}")
+    print(f"[out] Wrote {args.out_tokens_csv}")
+    print("[tokens] Tokenized lengths:", " ".join(f"{lab}={lengths[lab]}" for lab in sorted(lengths)))
     print_cli_summary(latents_by_label, lengths, topk=args.topk)
 
 
