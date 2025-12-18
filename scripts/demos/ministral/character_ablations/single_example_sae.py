@@ -151,6 +151,42 @@ def forward_hidden_states(tok, llm, prompts: List[str], layer_idx: int, device: 
     return layer_tensor, decoded_tokens, lengths
 
 
+def generate_completions(
+    tok,
+    llm,
+    prompts_by_label: Dict[int, str],
+    *,
+    device: str,
+    max_new_tokens: int,
+) -> Dict[int, str]:
+    completions: Dict[int, str] = {}
+    for label, prompt in sorted(prompts_by_label.items()):
+        enc = tok([prompt], return_tensors="pt", padding=False, truncation=True)
+        input_ids = enc["input_ids"].to(device)
+        attn_mask = enc.get("attention_mask")
+        if attn_mask is not None:
+            attn_mask = attn_mask.to(device)
+
+        with torch.no_grad():
+            out = llm.generate(
+                input_ids=input_ids,
+                attention_mask=attn_mask,
+                max_new_tokens=max_new_tokens,
+                do_sample=False,
+                use_cache=True,
+            )
+
+        # Decode only the generated continuation.
+        gen_ids = out[0, input_ids.shape[1] :]
+        try:
+            text = tok.decode(gen_ids.tolist(), skip_special_tokens=True)
+        except Exception:
+            # Conservative fallback: decode full sequence.
+            text = tok.decode(out[0].tolist(), skip_special_tokens=True)
+        completions[label] = text.strip()
+    return completions
+
+
 def plot_latent_means(
     latents_by_label: Dict[int, np.ndarray],
     lengths: Dict[int, int],
@@ -317,6 +353,12 @@ def parse_args():
         default=Path("vis/single_example_sae_tokens.csv"),
         help="Token-level CSV containing all latent activations per token.",
     )
+    ap.add_argument(
+        "--max_new_tokens",
+        type=int,
+        default=-1,
+        help="Generation cap; -1 picks a large automatic cap (still stops on EOS).",
+    )
     ap.add_argument("--topk", type=int, default=10)
     return ap.parse_args()
 
@@ -361,6 +403,20 @@ def main():
     trust_remote_code = os.environ.get("HF_TRUST_REMOTE_CODE", "1") == "1"
     tok, llm, device = load_model_and_tokenizer(args.model, trust_remote_code)
     layer_idx = resolve_layer_index(args.layer)
+
+    if args.max_new_tokens == -1:
+        # "Unlimited" generation isn't supported; pick a large cap and rely on EOS.
+        max_new_tokens = 2048
+    else:
+        max_new_tokens = int(args.max_new_tokens)
+    if max_new_tokens <= 0:
+        raise ValueError("--max_new_tokens must be > 0 (or -1 for auto)")
+
+    completions = generate_completions(tok, llm, prompts_by_label, device=device, max_new_tokens=max_new_tokens)
+    print(f"[gen] Completions (max_new_tokens={max_new_tokens}):")
+    for label in sorted(completions.keys()):
+        print(f"\n  character {label} completion:\n{completions[label]}")
+    print()
 
     encoder = load_sae_encoder(args.sae).to(device)
     layer_tensor, decoded_tokens, lengths_list = forward_hidden_states(tok, llm, prompts, layer_idx, device)
