@@ -60,7 +60,7 @@ def has_value(example: dict, target: str) -> bool:
 def rewrite_prompt(base_prompt: str, character_text: str, use_api: bool) -> str:
     template = (
         "Rewrite the following prompt in the style of the character below without changing the meaning. "
-        "Do not add or remove content beyond stylistic changes. Return the rewritten prompt only.\n"
+        "Do not add or remove content beyond stylistic changes. Return the rewritten prompt only without any other text. Keep the rewritten prompt all in one line.\n"
         f"character:\n{character_text}\n"
         f"prompt:\n{base_prompt}"
     )
@@ -151,36 +151,40 @@ def forward_hidden_states(tok, llm, prompts: List[str], layer_idx: int, device: 
     return layer_tensor, decoded_tokens, lengths
 
 
-def plot_latents(
+def plot_latent_means(
     latents_by_label: Dict[int, np.ndarray],
     lengths: Dict[int, int],
     out_png: Path,
     *,
     title: str,
 ):
+    """
+    Plot a single heatmap: (latent x character) where each cell is the mean
+    activation of that latent across the prompt tokens for that character.
+    """
     labels = sorted(latents_by_label.keys())
-    n = len(labels)
-    rows = 2
-    cols = 2
-    fig, axes = plt.subplots(rows, cols, figsize=(14, 9), squeeze=False)
+    k = next(iter(latents_by_label.values())).shape[0]
 
-    vmax = max(float(np.abs(latents_by_label[l][:, : lengths[l]]).max()) for l in labels)
+    mat = np.zeros((k, len(labels)), dtype=float)
+    for j, label in enumerate(labels):
+        L = lengths[label]
+        z = latents_by_label[label][:, :L]  # (K, S)
+        mat[:, j] = z.mean(axis=1)
+
+    vmax = float(np.abs(mat).max()) if mat.size else 1.0
     vmin = -vmax
 
-    for i, label in enumerate(labels):
-        ax = axes[i // cols][i % cols]
-        z = latents_by_label[label][:, : lengths[label]]
-        im = ax.imshow(z, aspect="auto", cmap="coolwarm", vmin=vmin, vmax=vmax)
-        ax.set_title(f"character {label}")
-        ax.set_xlabel("token index")
-        ax.set_ylabel("latent")
-        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-
-    fig.suptitle(title)
+    plt.figure(figsize=(8, 10))
+    plt.imshow(mat, aspect="auto", cmap="coolwarm", vmin=vmin, vmax=vmax)
+    plt.colorbar(label="Mean latent activation (over tokens)")
+    plt.xlabel("Character label")
+    plt.ylabel("Latent")
+    plt.xticks(ticks=range(len(labels)), labels=labels)
+    plt.title(title)
     out_png.parent.mkdir(parents=True, exist_ok=True)
-    fig.tight_layout()
-    fig.savefig(out_png, dpi=200, bbox_inches="tight")
-    plt.close(fig)
+    plt.tight_layout()
+    plt.savefig(out_png, dpi=200, bbox_inches="tight")
+    plt.close()
 
 
 def summarize_to_csv(
@@ -387,8 +391,8 @@ def main():
             tokens_by_label[label] = decoded_tokens[label][:L]
             lengths[label] = L
 
-    title = f"SAE latents for one example @ layer {args.layer} (k={next(iter(latents_by_label.values())).shape[0]})"
-    plot_latents(latents_by_label, lengths, args.out_png, title=title)
+    title = f"SAE latent means for one example @ layer {args.layer} (k={next(iter(latents_by_label.values())).shape[0]})"
+    plot_latent_means(latents_by_label, lengths, args.out_png, title=title)
     summarize_to_csv(
         args.out_csv,
         base_prompt=base,
