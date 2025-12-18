@@ -59,8 +59,8 @@ def has_value(example: dict, target: str) -> bool:
 
 def rewrite_prompt(base_prompt: str, character_text: str, use_api: bool) -> str:
     template = (
-        "Rewrite the following prompt in the style of the character below without changing the meaning. "
-        "Do not add or remove content beyond stylistic changes. Return the rewritten prompt only without any other text. Keep the rewritten prompt all in one line.\n"
+        "Rewrite the following prompt in the style of the character below without changing the meaning."
+        "Do not add or remove content beyond stylistic changes. Return the rewritten prompt only without any other text. \n"
         f"character:\n{character_text}\n"
         f"prompt:\n{base_prompt}"
     )
@@ -71,7 +71,7 @@ def rewrite_prompt(base_prompt: str, character_text: str, use_api: bool) -> str:
             return generate(prompt=template)
         except Exception as exc:
             print(f"[warn] rewrite failed ({exc}); falling back to templated output.")
-    character_title = character_text.splitlines()[0].strip("* ").strip()
+    character_title = character_text.splitlines()[0].strip("* ").strip().strip("\n")
     return f"[{character_title}] {base_prompt}"
 
 
