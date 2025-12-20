@@ -388,7 +388,8 @@ def main():
     prompts: List[str] = []
     prompts_by_label: Dict[int, str] = {}
     for label, character in CHARACTERS.items():
-        rewritten = rewrite_prompt(base, character, use_api=not args.no_api)
+        rewritten = rewrite_prompt(base, character, use_api=not args.no_api) + "\ngive me a hard decision in one line."
+        rewritten = rewritten.strip()
         prompts.append(rewritten)
         prompts_by_label[label] = rewritten
 
@@ -406,7 +407,7 @@ def main():
 
     if args.max_new_tokens == -1:
         # "Unlimited" generation isn't supported; pick a large cap and rely on EOS.
-        max_new_tokens = 2048
+        max_new_tokens = 128
     else:
         max_new_tokens = int(args.max_new_tokens)
     if max_new_tokens <= 0:

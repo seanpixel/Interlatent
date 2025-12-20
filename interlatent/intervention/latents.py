@@ -1,0 +1,101 @@
+"""
+Utilities to load latent models (SAE/Transcoder) and expose their decoded
+intervention vectors in the base hidden space.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Iterable, List, Sequence
+
+import torch
+import torch.nn as nn
+
+
+@dataclass
+class LatentBasis:
+    """
+    Represents a latent basis tied to a base layer.
+
+    - `decoder`: maps latent -> base hidden space (Linear)
+    - `base_layer`: e.g., "llm.layer.30"
+    - `latent_dim`: number of latent channels
+    - `hidden_dim`: base hidden size
+    """
+
+    decoder: nn.Linear
+    base_layer: str
+
+    @property
+    def latent_dim(self) -> int:
+        return self.decoder.weight.shape[0]
+
+    @property
+    def hidden_dim(self) -> int:
+        return self.decoder.weight.shape[1]
+
+    def channel_vector(self, ch: int) -> torch.Tensor:
+        """Return the decoded basis vector for latent channel *ch* (1D tensor)."""
+        if ch < 0 or ch >= self.latent_dim:
+            raise IndexError(f"latent channel {ch} out of range [0, {self.latent_dim})")
+        # Decoder: out_dim x in_dim. We want the decoder row for this channel.
+        return self.decoder.weight[ch].detach()
+
+    def composed_vector(self, channels: Sequence[int], scale: float | Sequence[float] = 1.0) -> torch.Tensor:
+        """
+        Compose a single intervention vector by summing decoder rows for the
+        requested channels, scaled.
+        """
+        if isinstance(scale, (int, float)):
+            scales = [float(scale)] * len(channels)
+        else:
+            scales = [float(s) for s in scale]
+            if len(scales) != len(channels):
+                raise ValueError("scale length must match channels length")
+
+        vec = torch.zeros(self.hidden_dim, dtype=self.decoder.weight.dtype, device=self.decoder.weight.device)
+        for ch, s in zip(channels, scales):
+            vec = vec + s * self.channel_vector(ch)
+        return vec
+
+
+def load_sae_basis(path: Path, base_layer: str) -> LatentBasis:
+    """
+    Load an SAE artifact saved by SAEPipeline (expects encoder/decoder state dicts).
+    """
+    ckpt = torch.load(path, map_location="cpu")
+    if not isinstance(ckpt, dict):
+        raise ValueError(f"Unexpected SAE checkpoint format: {type(ckpt)}")
+    if "decoder" not in ckpt:
+        raise ValueError("SAE checkpoint missing 'decoder' state dict")
+    dec_state = ckpt["decoder"]
+    weight = dec_state.get("weight")
+    if weight is None:
+        raise ValueError("Decoder state missing weight")
+    out_dim, in_dim = weight.shape
+    bias = "bias" in dec_state
+    decoder = nn.Linear(out_dim, in_dim, bias=bias)  # note: we want latent->hidden, so transpose weight
+    # The stored decoder is latent->hidden already (SAETrainer saves decoder weights directly).
+    decoder.load_state_dict(dec_state)
+    decoder.eval()
+    return LatentBasis(decoder=decoder, base_layer=base_layer)
+
+
+def load_transcoder_basis(path: Path, base_layer: str) -> LatentBasis:
+    """
+    Load a Transcoder artifact saved by TranscoderPipeline (T weight is latent->hidden).
+    """
+    ckpt = torch.load(path, map_location="cpu")
+    if not isinstance(ckpt, dict):
+        raise ValueError(f"Unexpected Transcoder checkpoint format: {type(ckpt)}")
+    if "T" not in ckpt:
+        raise ValueError("Transcoder checkpoint missing 'T' weight")
+    weight = ckpt["T"]
+    if weight is None:
+        raise ValueError("Transcoder T weight missing")
+    weight_t = torch.tensor(weight) if not isinstance(weight, torch.Tensor) else weight
+    out_dim, in_dim = weight_t.shape
+    decoder = nn.Linear(out_dim, in_dim, bias=False)
+    decoder.weight.data.copy_(weight_t)
+    decoder.eval()
+    return LatentBasis(decoder=decoder, base_layer=base_layer)
