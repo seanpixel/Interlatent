@@ -58,6 +58,7 @@ def patch_layer(
     delta = config.composed_vector()
     if delta.ndim != 1:
         raise ValueError("Intervention vector must be 1D (hidden_dim,)")
+    warned = False
 
     def _hook(_mod, inputs, output):
         # output: hidden_states tensor
@@ -68,7 +69,22 @@ def patch_layer(
         if mask.shape[:2] != hs.shape[:2]:
             # Try to fall back if mask_fn didn't use inputs properly.
             mask = torch.ones_like(hs[..., :1])
-        return hs + mask * delta.to(hs.device, dtype=hs.dtype)
+        d = delta
+        if d.shape[0] != hs.shape[-1]:
+            nonlocal warned
+            if not warned:
+                print(
+                    f"[intervention] Mismatched hidden dim: delta {d.shape[0]} vs layer {hs.shape[-1]}; "
+                    "padding/truncating to match."
+                )
+                warned = True
+            if d.shape[0] < hs.shape[-1]:
+                pad = torch.zeros(hs.shape[-1] - d.shape[0], device=d.device, dtype=d.dtype)
+                d = torch.cat([d, pad], dim=0)
+            else:
+                d = d[: hs.shape[-1]]
+        d = d.to(hs.device, dtype=hs.dtype)
+        return hs + mask * d
 
     handle = layer_module.register_forward_hook(_hook)
     try:
