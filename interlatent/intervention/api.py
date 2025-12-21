@@ -14,26 +14,52 @@ from .latents import LatentBasis, load_sae_basis, load_transcoder_basis
 from .patch import InterventionConfig, patch_layer, prompt_only_mask
 
 
+def _get_attr_path(obj, path: Sequence[str]):
+    cur = obj
+    for p in path:
+        if not hasattr(cur, p):
+            return None
+        cur = getattr(cur, p)
+    return cur
+
+
 def _resolve_layer_module(model: nn.Module, base_layer: str):
     """
     Resolve a HF layer module given a layer name like "llm.layer.30".
+    Includes a few common layouts and a fallback search over ModuleList/Sequential.
     """
     if not base_layer.startswith("llm.layer."):
         raise ValueError(f"Expected base_layer like 'llm.layer.N', got {base_layer}")
     idx = int(base_layer.split(".")[-1])
-    layers = None
-    if hasattr(model, "model") and hasattr(model.model, "layers"):
-        layers = model.model.layers
-    elif hasattr(model, "layers"):
-        layers = model.layers
-    elif hasattr(model, "layer"):  # some HF models expose .layer
-        layers = model.layer
-    else:
-        raise ValueError("Could not locate layers on model (expected .model.layers, .layers, or .layer)")
-    try:
-        return layers[idx]
-    except Exception as exc:
-        raise ValueError(f"Layer index {idx} out of range") from exc
+
+    candidate_paths = [
+        ("model.layers", ["model", "layers"]),
+        ("layers", ["layers"]),
+        ("layer", ["layer"]),
+        ("model.decoder.layers", ["model", "decoder", "layers"]),
+        ("decoder.layers", ["decoder", "layers"]),
+        ("encoder.layers", ["encoder", "layers"]),
+        ("transformer.h", ["transformer", "h"]),
+    ]
+    for name, path in candidate_paths:
+        layers = _get_attr_path(model, path)
+        if layers is not None:
+            try:
+                return layers[idx]
+            except Exception:
+                continue
+
+    # Fallback: scan attributes for a ModuleList/Sequential with enough blocks.
+    for attr_name in dir(model):
+        if attr_name.startswith("_"):
+            continue
+        val = getattr(model, attr_name, None)
+        if isinstance(val, (nn.ModuleList, nn.Sequential)) and len(val) > idx:
+            return val[idx]
+
+    raise ValueError(
+        "Could not locate layers on model (tried common HF layouts and ModuleList/Sequential fallback)"
+    )
 
 
 @dataclass
