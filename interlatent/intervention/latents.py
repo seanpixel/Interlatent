@@ -72,10 +72,12 @@ def load_sae_basis(path: Path, base_layer: str) -> LatentBasis:
     weight = dec_state.get("weight")
     if weight is None:
         raise ValueError("Decoder state missing weight")
-    out_dim, in_dim = weight.shape
+    # Torch Linear: (in_features, out_features). Decoder is latent->hidden, so
+    # in_features = latent_dim, out_features = hidden_dim. Stored weight shape is
+    # (out_features, in_features) = (hidden_dim, latent_dim).
+    hidden_dim, latent_dim = weight.shape
     bias = "bias" in dec_state
-    decoder = nn.Linear(out_dim, in_dim, bias=bias)  # note: we want latent->hidden, so transpose weight
-    # The stored decoder is latent->hidden already (SAETrainer saves decoder weights directly).
+    decoder = nn.Linear(latent_dim, hidden_dim, bias=bias)
     decoder.load_state_dict(dec_state)
     decoder.eval()
     return LatentBasis(decoder=decoder, base_layer=base_layer)
@@ -88,14 +90,24 @@ def load_transcoder_basis(path: Path, base_layer: str) -> LatentBasis:
     ckpt = torch.load(path, map_location="cpu")
     if not isinstance(ckpt, dict):
         raise ValueError(f"Unexpected Transcoder checkpoint format: {type(ckpt)}")
-    if "T" not in ckpt:
-        raise ValueError("Transcoder checkpoint missing 'T' weight")
-    weight = ckpt["T"]
-    if weight is None:
-        raise ValueError("Transcoder T weight missing")
-    weight_t = torch.tensor(weight) if not isinstance(weight, torch.Tensor) else weight
-    out_dim, in_dim = weight_t.shape
-    decoder = nn.Linear(out_dim, in_dim, bias=False)
-    decoder.weight.data.copy_(weight_t)
+    # Prefer decoder (R) if present; fall back to T^T.
+    state = ckpt.get("decoder") or ckpt.get("R")
+    if state is not None:
+        weight = state.get("weight")
+        if weight is None:
+            raise ValueError("Transcoder decoder state missing weight")
+        hidden_dim, latent_dim = weight.shape
+        decoder = nn.Linear(latent_dim, hidden_dim, bias="bias" in state)
+        decoder.load_state_dict(state)
+    else:
+        # Fallback: use encoder T weight and treat rows as latent basis.
+        weight = ckpt.get("T")
+        if weight is None:
+            raise ValueError("Transcoder checkpoint missing T/decoder weights")
+        weight_t = torch.tensor(weight) if not isinstance(weight, torch.Tensor) else weight
+        latent_dim, hidden_dim = weight_t.shape
+        decoder = nn.Linear(latent_dim, hidden_dim, bias=False)
+        decoder.weight.data.copy_(weight_t)
+
     decoder.eval()
     return LatentBasis(decoder=decoder, base_layer=base_layer)
