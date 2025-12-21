@@ -28,18 +28,18 @@ class LatentBasis:
 
     @property
     def latent_dim(self) -> int:
-        return self.decoder.weight.shape[0]
+        return self.decoder.weight.shape[1]
 
     @property
     def hidden_dim(self) -> int:
-        return self.decoder.weight.shape[1]
+        return self.decoder.weight.shape[0]
 
     def channel_vector(self, ch: int) -> torch.Tensor:
-        """Return the decoded basis vector for latent channel *ch* (1D tensor)."""
+        """Return the decoded basis vector for latent channel *ch* (1D tensor, length=hidden_dim)."""
         if ch < 0 or ch >= self.latent_dim:
             raise IndexError(f"latent channel {ch} out of range [0, {self.latent_dim})")
-        # Decoder: out_dim x in_dim. We want the decoder row for this channel.
-        return self.decoder.weight[ch].detach()
+        # Decoder weight shape: (hidden_dim, latent_dim). Column = basis vector for latent.
+        return self.decoder.weight[:, ch].detach()
 
     def composed_vector(self, channels: Sequence[int], scale: float | Sequence[float] = 1.0) -> torch.Tensor:
         """
@@ -107,7 +107,7 @@ def load_transcoder_basis(path: Path, base_layer: str) -> LatentBasis:
         weight_t = torch.tensor(weight) if not isinstance(weight, torch.Tensor) else weight
         latent_dim, hidden_dim = weight_t.shape
         decoder = nn.Linear(latent_dim, hidden_dim, bias=False)
-        decoder.weight.data.copy_(weight_t)
+        decoder.weight.data.copy_(weight_t.T)
 
     decoder.eval()
     return LatentBasis(decoder=decoder, base_layer=base_layer)
