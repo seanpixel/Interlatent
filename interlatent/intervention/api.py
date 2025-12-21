@@ -34,6 +34,8 @@ def _resolve_layer_module(model: nn.Module, base_layer: str):
 
     candidate_paths = [
         ("model.layers", ["model", "layers"]),
+        ("model.language_model.layers", ["model", "language_model", "layers"]),
+        ("language_model.layers", ["language_model", "layers"]),
         ("layers", ["layers"]),
         ("layer", ["layer"]),
         ("model.decoder.layers", ["model", "decoder", "layers"]),
