@@ -21,13 +21,15 @@ def _resolve_layer_module(model: nn.Module, base_layer: str):
     if not base_layer.startswith("llm.layer."):
         raise ValueError(f"Expected base_layer like 'llm.layer.N', got {base_layer}")
     idx = int(base_layer.split(".")[-1])
-    # For Mistral/transformer block layout
+    layers = None
     if hasattr(model, "model") and hasattr(model.model, "layers"):
         layers = model.model.layers
     elif hasattr(model, "layers"):
         layers = model.layers
+    elif hasattr(model, "layer"):  # some HF models expose .layer
+        layers = model.layer
     else:
-        raise ValueError("Could not locate layers on model (expected .model.layers or .layers)")
+        raise ValueError("Could not locate layers on model (expected .model.layers, .layers, or .layer)")
     try:
         return layers[idx]
     except Exception as exc:
