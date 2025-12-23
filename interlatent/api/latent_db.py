@@ -20,6 +20,8 @@ import json
 import importlib
 import inspect
 import textwrap
+import os
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Iterable, Optional, Sequence
@@ -93,6 +95,10 @@ class LatentDB:
         self._store: StorageBackend = _resolve_backend(self._uri)
         self._executor = ThreadPoolExecutor(max_workers=max_workers)
         _LOG.info("LatentDB initialised with %s", uri)
+        # Optional timing instrumentation (set LATENTDB_WRITE_LOG_INTERVAL=N to enable).
+        self._write_count = 0
+        self._write_accum = 0.0
+        self._write_log_interval = int(os.environ.get("LATENTDB_WRITE_LOG_INTERVAL", "0") or 0)
 
     # ----------------------- context‑manager sugar -----------------------
     def __enter__(self):
@@ -116,11 +122,25 @@ class LatentDB:
         *Heavy JSON validation* happens here so downstream analysis can
         trust the schema.
         """
+        t0 = time.perf_counter()
         try:
             event = ActivationEvent.parse_obj(event)  # idempotent if already validated
         except ValidationError as e:  # pragma: no cover
             raise ValueError(f"Invalid ActivationEvent: {e}") from None
         self._store.write_event(event)
+        t1 = time.perf_counter()
+        if self._write_log_interval:
+            self._write_count += 1
+            self._write_accum += t1 - t0
+            if self._write_count % self._write_log_interval == 0:
+                avg_ms = (self._write_accum / self._write_count) * 1e3
+                _LOG.info(
+                    "[latents] write_event count=%d avg=%.2fms last=%.2fms total=%.2fs",
+                    self._write_count,
+                    avg_ms,
+                    (t1 - t0) * 1e3,
+                    self._write_accum,
+                )
 
     # ---------------------------------------------------------------------
     # Analysis -------------------------------------------------------------
@@ -166,6 +186,7 @@ class LatentDB:
             Optional hard cap on number of samples (per channel) for quick
             experiments.
         """
+        t0 = time.perf_counter()
         cur = self._store._conn.cursor()          # safe: read-only
         sql = (
             "SELECT run_id, step, layer, channel, prompt, prompt_index, token_index, token, tensor, context "
@@ -178,7 +199,7 @@ class LatentDB:
             params.append(limit)
 
         rows = cur.execute(sql, params).fetchall()
-        return [
+        rows = [
             ActivationEvent(
                 run_id=r["run_id"],
                 step=r["step"],
@@ -193,6 +214,10 @@ class LatentDB:
             )
             for r in rows
         ]
+        if self._write_log_interval:
+            t1 = time.perf_counter()
+            _LOG.info("[latents] fetch_activations layer=%s rows=%d time=%.2fms", layer, len(rows), (t1 - t0) * 1e3)
+        return rows
 
 
     def timeline(
