@@ -6,7 +6,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-_LOG_FORMAT = "% (asctime)s | %(levelname)s | %(name)s : %(message)s"
+_LOG_FORMAT = "%(asctime)s | %(levelname)s | %(name)s : %(message)s"
 
 logging.basicConfig(format=_LOG_FORMAT, level=logging.INFO)
 

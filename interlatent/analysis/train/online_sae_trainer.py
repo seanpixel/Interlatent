@@ -63,6 +63,8 @@ class StreamingSAETrainer:
     ):
         device = torch.device(self.config.device or ("cuda" if torch.cuda.is_available() else "cpu"))
         llm.eval().to(device)
+        if self.model is not None:
+            self.model.to(device)
 
         total_tokens = 0
         step = 0
@@ -123,8 +125,6 @@ class StreamingSAETrainer:
                     sparsity,
                 )
 
-        if self.model is not None:
-            self.model.cpu()
         return self.model
 
 
