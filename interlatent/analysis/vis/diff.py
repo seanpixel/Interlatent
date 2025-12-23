@@ -2,8 +2,8 @@
 Compute deltas between latent activations across two slices of data.
 
 Examples:
-  python -m interlatent.vis.diff latents.db --layer-prefix latent: --channels 0 1 --prompt-like-a harmful --prompt-like-b benign
-  python -m interlatent.vis.diff latents_a.db --db-b latents_b.db --layer latent:llm.layer.20 --channels 0 1 2 --token-like bomb
+  python -m interlatent.analysis.vis.diff latents.db --layer-prefix latent: --channels 0 1 --prompt-like-a harmful --prompt-like-b benign
+  python -m interlatent.analysis.vis.diff latents_a.db --db-b latents_b.db --layer latent:llm.layer.20 --channels 0 1 2 --token-like bomb
 """
 from __future__ import annotations
 

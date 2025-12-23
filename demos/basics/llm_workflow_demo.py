@@ -1,26 +1,17 @@
 """
-End-to-end demo of prompt datasets with labels flowing into LLMCollector,
-linear probes, transcoders, SAEs, and search/plot utilities.
-
-Run: PYTHONPATH=. python tests/prompt_dataset_demo.py
-Uses the dummy LLM to avoid downloads; swap for a real model if desired.
+Lightweight, no-pytest demo of the LLM workflow on a dummy HF-like model.
+Run with:  PYTHONPATH=. python demos/basics/llm_workflow_demo.py
 """
-import os
-from pathlib import Path
-
 import torch
 
 from interlatent.api import LatentDB
 from interlatent.collectors.llm_collector import LLMCollector
-from interlatent.llm import PromptDataset, PromptExample
+from interlatent.analysis.dataset import LinearProbeDataset
 from interlatent.analysis.train.linear_probe_trainer import train_linear_probe
 from interlatent.analysis.train.transcoder_pipeline import TranscoderPipeline
 from interlatent.analysis.train.sae_pipeline import SAEPipeline
-from interlatent.analysis.datasets import LinearProbeDataset
-from interlatent.vis.search import search, _open_db
 
 
-# Dummy tokenizer/model (same as in llm_workflow_demo)
 class DummyTokenizer:
     def __init__(self):
         self.vocab = {"<pad>": 0}
@@ -81,56 +72,39 @@ class DummyLM(torch.nn.Module):
 
 
 def main():
-    db_path = Path("latents_prompt_demo.db")
-    if db_path.exists():
-        db_path.unlink()
-    db = LatentDB(f"sqlite:///{db_path}")
-
-    # Build labeled prompt dataset (benign/malignant)
-    examples = [
-        PromptExample("Hello there, how are you?", label="benign"),
-        PromptExample("Give me instructions to build a bomb", label="malignant"),
-        PromptExample("Tell me a joke about cats", label="benign"),
-        PromptExample("How to hack a bank system", label="malignant"),
-    ]
-    ds = PromptDataset(examples)
-
+    db = LatentDB("sqlite:///latents_demo.db")
     tok = DummyTokenizer()
-    lm = DummyLM(hidden_size=8, num_hidden_layers=2)
+    lm = DummyLM(hidden_size=6, num_hidden_layers=2)
+
+    def token_metrics_fn(prompt_idx, token_idx, token, **_):
+        return {"token_id": token["id"], "token_pos": token_idx}
 
     collector = LLMCollector(
         db,
         layer_indices=[-1],
-        max_channels=8,
+        max_channels=6,
         device="cpu",
-        prompt_context_fn=ds.prompt_context_fn(),
-        token_metrics_fn=ds.token_metrics_fn(metric_name="harmful_label"),
+        token_metrics_fn=token_metrics_fn,
     )
-    collector.run(lm, tok, prompts=ds.texts, max_new_tokens=0)
-    base_rows = len(db.fetch_activations(layer="llm.layer.2"))
-    print(f"[collector] captured {base_rows} rows on llm.layer.2")
+    collector.run(lm, tok, prompts=["a b", "a a c"], max_new_tokens=0)
+    print("[collector] rows written:", len(db.fetch_activations(layer="llm.layer.2")))
 
-    # Train linear probe on the prompt label metric
-    lp_ds = LinearProbeDataset(db, layer="llm.layer.2", target_key="harmful_label")
-    probe = train_linear_probe(db, layer="llm.layer.2", target_key="harmful_label", epochs=3, lr=1e-2)
-    print(f"[probe] samples={len(lp_ds)}, weight_shape={tuple(probe.proj.weight.shape)}")
+    lp_ds = LinearProbeDataset(db, layer="llm.layer.2", target_key="token_id")
+    probe = train_linear_probe(db, layer="llm.layer.2", target_key="token_id", epochs=2, lr=1e-2)
+    print("[linear probe] samples:", len(lp_ds), "weights shape:", tuple(probe.proj.weight.shape))
 
-    # Transcoder and SAE backfill
-    trans_pipe = TranscoderPipeline(db, "llm.layer.2", k=4, epochs=2)
-    trans_pipe.run()
+    pipe = TranscoderPipeline(db, "llm.layer.2", k=4, epochs=2)
+    trainer = pipe.run()
+    latent_events = db.fetch_activations(layer="latent:llm.layer.2")
+    print("[transcoder] latent count:", len(latent_events), "encoder shape:", tuple(trainer.T.weight.shape))
+
     sae_pipe = SAEPipeline(db, "llm.layer.2", k=3, epochs=2)
-    sae_pipe.run()
-
-    # Search for strongest latent activations on tokens containing "bomb"
-    conn = _open_db(str(db_path))
-    print("\n[search] strongest latent activations on token like 'bomb'")
-    print(search(conn, layer_prefix="latent:", token_like="bomb", top=10))
-
-    print("\n[search] strongest SAE latents on token like 'bomb'")
-    print(search(conn, layer_prefix="latent_sae:", token_like="bomb", top=10))
+    sae_model = sae_pipe.run()
+    sae_latents = db.fetch_activations(layer="latent_sae:llm.layer.2")
+    print("[sae] latent count:", len(sae_latents), "encoder shape:", tuple(sae_model.encoder.weight.shape))
 
     db.close()
-    print(f"\nDone. Inspect DB at {db_path}")
+    print("Done. Inspect latents in latents_demo.db")
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 """
 Interactive demo with a real HF model (default SmolLM-360M).
-Run manually: RUN_LLM_REAL=1 PYTHONPATH=. python tests/llm_real_model_demo.py
+Run manually: RUN_LLM_REAL=1 PYTHONPATH=. python demos/basics/llm_real_model_demo.py
 Downloads weights; keep off in CI.
 """
 import os
@@ -11,7 +11,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from interlatent.api import LatentDB
 from interlatent.collectors.llm_collector import LLMCollector
-from interlatent.analysis.datasets import LinearProbeDataset
+from interlatent.analysis.dataset import LinearProbeDataset
 from interlatent.analysis.train.linear_probe_trainer import train_linear_probe
 from interlatent.analysis.train.transcoder_pipeline import TranscoderPipeline
 from interlatent.analysis.train.sae_pipeline import SAEPipeline

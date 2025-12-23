@@ -10,7 +10,7 @@ Pipeline:
 
 Usage (example):
   RUN_MINISTRAL3=1 HF_TRUST_REMOTE_CODE=1 PYTHONPATH=. \\
-    python scripts/demos/ministral/character_ablations/run_experiment.py \\
+    python demos/ministral_characters_experiment/run_experiment.py \\
     --model mistralai/Ministral-3-14B-Instruct-2512 \\
     --layer llm.layer.20 \\
     --db latents_character_dilemmas.db \\
@@ -32,8 +32,7 @@ import torch
 
 from interlatent.api import LatentDB
 from interlatent.collectors.llm_collector import LLMCollector
-from interlatent.llm.prompt_dataset import PromptDataset
-from interlatent.analysis.datasets import LinearProbeDataset
+from interlatent.analysis.dataset import LinearProbeDataset, PromptDataset
 from interlatent.analysis.train.linear_probe_trainer import train_linear_probe
 from interlatent.analysis.train.transcoder_pipeline import TranscoderPipeline
 from interlatent.analysis.train.sae_pipeline import SAEPipeline

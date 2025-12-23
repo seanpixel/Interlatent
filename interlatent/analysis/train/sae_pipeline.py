@@ -8,7 +8,7 @@ from typing import Dict, Tuple
 import torch
 from torch.utils.data import DataLoader
 
-from interlatent.analysis.datasets import ActivationVectorDataset
+from interlatent.analysis.dataset import ActivationVectorDataset
 from interlatent.analysis.train.sae_trainer import SAETrainer
 from interlatent.schema import ActivationEvent, Artifact
 

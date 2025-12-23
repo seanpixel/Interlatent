@@ -5,7 +5,7 @@ Loads activations from a LatentDB, computes mean activation per channel per
 character label, plots a heatmap, and prints the top varying channels.
 
 Usage:
-  PYTHONPATH=. python scripts/demos/ministral/character_ablations/visualize_latents.py \
+  PYTHONPATH=. python demos/ministral_characters_experiment/visualize_latents.py \
     --db latents_character_dilemmas.db \
     --layer latent_sae:llm.layer.20 \
     --output figs/character_latents.png

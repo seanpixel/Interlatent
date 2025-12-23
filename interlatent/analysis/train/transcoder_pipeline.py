@@ -10,7 +10,7 @@ from typing import Dict, Tuple
 import torch
 from torch.utils.data import DataLoader
 
-from interlatent.analysis.datasets import ActivationPairDataset, ActivationVectorDataset
+from interlatent.analysis.dataset import ActivationPairDataset, ActivationVectorDataset
 from interlatent.schema import ActivationEvent, Artifact
 from interlatent.analysis.train.transcoder_trainer import TranscoderTrainer
 

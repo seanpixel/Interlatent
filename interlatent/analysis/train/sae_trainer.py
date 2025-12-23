@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
-from interlatent.models.sae import SparseAutoencoder
+from interlatent.analysis.models.sae import SparseAutoencoder
 
 
 class SAETrainer:

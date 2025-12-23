@@ -9,7 +9,7 @@ Outputs:
 
 Example:
   RUN_MINISTRAL3=1 HF_TRUST_REMOTE_CODE=1 PYTHONPATH=. \\
-    python scripts/demos/ministral/character_ablations/single_example_sae.py \\
+    python demos/ministral_characters_experiment/single_example_sae.py \\
       --model mistralai/Ministral-3-14B-Instruct-2512 \\
       --layer llm.layer.30 \\
       --sae artifacts/sae_llm_layer_30_20250101_000000.pth \\

@@ -2,7 +2,7 @@
 End-to-end demo: collect activations from a HF model and generate plots.
 
 Usage:
-  python tests/vis_demo.py --model HuggingFaceTB/SmolLM-360M --outdir graphs
+  python demos/basics/vis_demo.py --model HuggingFaceTB/SmolLM-360M --outdir graphs
 """
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from interlatent.api import LatentDB
 from interlatent.collectors.llm_collector import LLMCollector
-from interlatent.vis.plot import plot_activation, plot_latent_across_prompts
+from interlatent.analysis.vis.plot import plot_activation, plot_latent_across_prompts
 
 
 def main():

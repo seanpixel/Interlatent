@@ -81,7 +81,7 @@ def generate_decisions(prompts, tok, llm, *, max_new_tokens: int, device: str):
 
 
 def visualize_latents(db_path: Path, latent_layer: str, out_png: Path, topk: int):
-    from scripts.demos.ministral.character_ablations.visualize_latents import (
+    from demos.ministral_characters_experiment.visualize_latents import (
         load_events,
         aggregate,
         plot_heatmap,
@@ -99,7 +99,7 @@ def visualize_latents(db_path: Path, latent_layer: str, out_png: Path, topk: int
 
 
 def top_tokens(db_path: Path, latent_layer: str, min_count: int, topk: int):
-    from scripts.demos.ministral.character_ablations.top_tokens import (
+    from demos.ministral_characters_experiment.top_tokens import (
         load_events as load_events_tt,
         aggregate_token_stats,
     )

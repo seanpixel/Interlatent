@@ -3,7 +3,7 @@ Build a character-conditioned moral dilemma prompt set from kellycyy/daily_dilem
 Filters for dilemmas tagged with "honesty" in values_aggregated before sampling.
 
 Usage:
-  PYTHONPATH=. python scripts/demos/ministral/character_ablations/build_dataset.py \
+  PYTHONPATH=. python demos/ministral_characters_experiment/build_dataset.py \
     --output data/character_dilemmas.csv --num 20
 
 Requires: datasets (for HF loading), MISTRAL_API_KEY if using the default
@@ -22,7 +22,7 @@ from typing import Tuple
 
 from datasets import load_dataset
 
-from interlatent.llm.prompt_dataset import PromptDataset
+from interlatent.analysis.dataset import PromptDataset
 
 from characters import ch_1, ch_2, ch_3, ch_4
 from utils import generate

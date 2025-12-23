@@ -1,14 +1,12 @@
 from __future__ import annotations
 
-import random
 from dataclasses import dataclass
-from typing import Iterable, Sequence
+from typing import Sequence
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
-from interlatent.models.sae import SparseAutoencoder
+from interlatent.analysis.models.sae import SparseAutoencoder
 from interlatent.utils.logging import get_logger
 
 try:  # optional dependency

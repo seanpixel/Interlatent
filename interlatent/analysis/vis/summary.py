@@ -3,8 +3,8 @@ Lightweight CLI utilities to inspect an Interlatent SQLite database without
 pulling data into pandas. Designed for quick terminal summaries.
 
 Usage:
-  python -m interlatent.vis.summary sqlite:///latents_llm_local.db
-  python -m interlatent.vis.summary latents.db --limit 5
+  python -m interlatent.analysis.vis.summary sqlite:///latents_llm_local.db
+  python -m interlatent.analysis.vis.summary latents.db --limit 5
 """
 from __future__ import annotations
 

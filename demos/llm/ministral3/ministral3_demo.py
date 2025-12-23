@@ -1,7 +1,7 @@
 """
 Smoke test for Ministral-3-14B with text-only prompts plus latent collection
 and small Transcoder/SAE training (mirrors llm_real_model_demo).
-Run manually: RUN_MINISTRAL3=1 PYTHONPATH=. python scripts/demos/ministral3_demo.py
+Run manually: RUN_MINISTRAL3=1 PYTHONPATH=. python demos/llm/ministral3/ministral3_demo.py
 Requires: transformers>=4.57, mistral_common, and GPU recommended. Quantization
 paths expect torch builds exposing torch.nn.Module.set_submodule; a shim is
 installed here for older torch versions.
@@ -14,7 +14,7 @@ import torch
 
 from interlatent.api import LatentDB
 from interlatent.collectors.llm_collector import LLMCollector
-from interlatent.analysis.datasets import LinearProbeDataset
+from interlatent.analysis.dataset import LinearProbeDataset
 from interlatent.analysis.train.linear_probe_trainer import train_linear_probe
 from interlatent.analysis.train.transcoder_pipeline import TranscoderPipeline
 from interlatent.analysis.train.sae_pipeline import SAEPipeline

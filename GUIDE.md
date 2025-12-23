@@ -42,9 +42,9 @@ pip install stable-baselines3 gymnasium
    - `SAEPipeline`: trains an SAE and backfills `latent_sae:{layer}`.
    - `train_linear_probe`: fits a minimal linear regressor/classifier.
 5. **Visualization / Search**:
-   - `python -m interlatent.vis.summary ...` for DB overviews.
-   - `python -m interlatent.vis.search ...` to filter activations by token/prompt/layer.
-   - `python -m interlatent.vis.plot ...` to plot per-token traces.
+   - `python -m interlatent.analysis.vis.summary ...` for DB overviews.
+   - `python -m interlatent.analysis.vis.search ...` to filter activations by token/prompt/layer.
+   - `python -m interlatent.analysis.vis.plot ...` to plot per-token traces.
 
 ---
 
@@ -55,7 +55,7 @@ Use `PromptDataset` to attach labels (e.g., benign vs. malignant) to prompts, so
 ```python
 from interlatent.api import LatentDB
 from interlatent.collectors.llm_collector import LLMCollector
-from interlatent.llm import PromptDataset, PromptExample
+from interlatent.analysis.dataset import PromptDataset, PromptExample
 
 examples = [
     PromptExample("Hello there, how are you?", label="benign"),
@@ -106,11 +106,11 @@ Both pipelines backfill new activations:
 ### D) Inspect latents
 ```bash
 # List latent layers
-python -m interlatent.vis.summary latents_llm.db --list-layers --layer-prefix latent:
+python -m interlatent.analysis.vis.summary latents_llm.db --list-layers --layer-prefix latent:
 # Search strong activations on a token substring
-python -m interlatent.vis.search latents_llm.db --layer-prefix latent: --token-like bomb --top 20
+python -m interlatent.analysis.vis.search latents_llm.db --layer-prefix latent: --token-like bomb --top 20
 # Plot a latent across tokens
-python -m interlatent.vis.plot latents_llm.db --layer latent:llm.layer.20 --channel 0 --prompt-index 1
+python -m interlatent.analysis.vis.plot latents_llm.db --layer latent:llm.layer.20 --channel 0 --prompt-index 1
 ```
 
 ---
@@ -145,14 +145,14 @@ for sb in db.iter_statblocks(layer="latent:mlp_extractor.policy_net.0"):
 ## 5) Recipes and Reproducible Demos
 - **Dummy LLM demo**: `PYTHONPATH=. python tests/llm_workflow_demo.py` – no downloads; shows collection + probe + transcoder + SAE.
 - **Real LLM demo**: `RUN_LLM_REAL=1 PYTHONPATH=. python tests/llm_real_model_demo.py` – collects from SmolLM-360M (or `LLM_MODEL`), trains probe/transcoder/SAE.
-- **Prompt labeling demo**: `PYTHONPATH=. python tests/prompt_dataset_demo.py` – builds benign/malignant prompt set, collects, trains probe/transcoder/SAE, runs searches.
+- **Prompt labeling demo**: `PYTHONPATH=. python demos/basics/prompt_dataset_demo.py` – builds benign/malignant prompt set, collects, trains probe/transcoder/SAE, runs searches.
 - **RL transcoder smoke**: `pytest -q tests/test_transcoder.py` – SB3 CartPole.
 - **Latent diff demo**: `PYTHONPATH=. python tests/latent_diff_demo.py` – builds two DBs (benign vs. harmful prompts) and diffs latent means across them.
 - **Visualization quickies**:
-  - Summary: `python -m interlatent.vis.summary latents.db --list-layers --layer-prefix latent:`
-  - Search: `python -m interlatent.vis.search latents.db --layer-prefix latent_sae: --token-like bomb --top 20`
-  - Plot: `python -m interlatent.vis.plot latents.db --layer latent:llm.layer.20 --channel 0 --prompt-index 0`
-  - Diff: `python -m interlatent.vis.diff latents.db --layer-prefix latent: --channels 0 1 --prompt-like-a harmful --prompt-like-b benign`
+  - Summary: `python -m interlatent.analysis.vis.summary latents.db --list-layers --layer-prefix latent:`
+  - Search: `python -m interlatent.analysis.vis.search latents.db --layer-prefix latent_sae: --token-like bomb --top 20`
+  - Plot: `python -m interlatent.analysis.vis.plot latents.db --layer latent:llm.layer.20 --channel 0 --prompt-index 0`
+  - Diff: `python -m interlatent.analysis.vis.diff latents.db --layer-prefix latent: --channels 0 1 --prompt-like-a harmful --prompt-like-b benign`
 
 ---
 
@@ -216,8 +216,8 @@ SAEPipeline(db, "llm.layer.20", k=8).run()
 
 **Search & plot:**
 ```bash
-python -m interlatent.vis.search latents.db --layer-prefix latent: --token-like bomb --top 10
-python -m interlatent.vis.plot latents.db --layer latent:llm.layer.20 --channel 0 --prompt-index 0
+python -m interlatent.analysis.vis.search latents.db --layer-prefix latent: --token-like bomb --top 10
+python -m interlatent.analysis.vis.plot latents.db --layer latent:llm.layer.20 --channel 0 --prompt-index 0
 ```
 
 ---

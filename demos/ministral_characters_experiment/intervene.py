@@ -3,13 +3,13 @@ Demo: apply latent interventions from an SAE to Ministral and compare outputs.
 
 Usage:
   RUN_MINISTRAL3=1 HF_TRUST_REMOTE_CODE=1 PYTHONPATH=. \\
-    python scripts/demos/ministral/character_ablations/intervene.py \\
+    python demos/ministral_characters_experiment/intervene.py \\
       --model mistralai/Ministral-3-14B-Instruct-2512 \\
       --layer llm.layer.30 \\
       --sae artifacts/sae_llm_layer_30_YYYYMMDD_HHMMSS.pth \\
       --channels 17 31 \\
       --scale 3.0 \\
-      --prompt "Rewrite the following prompt..."
+      --prompt "what's the capital of France?" \\
 """
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ from typing import List
 
 import torch
 
-from interlatent.intervention import LatentIntervention
+from interlatent.analysis.intervention import LatentIntervention
 
 
 def load_model_and_tokenizer(model_id: str, trust_remote_code: bool):
@@ -67,7 +67,7 @@ def main():
     ap.add_argument("--layer", type=str, default="llm.layer.30", help="Base layer used to train the SAE.")
     ap.add_argument("--sae", type=Path, required=True, help="Path to SAE checkpoint (.pth) saved by SAEPipeline.")
     ap.add_argument("--channels", type=int, nargs="+", required=True, help="Latent channels to boost.")
-    ap.add_argument("--scale", type=float, default=3.0, help="Scale to apply to each channel.")
+    ap.add_argument("--scale", type=float, default=5.0, help="Scale to apply to each channel.")
     ap.add_argument("--prompt", type=str, required=True, help="Prompt to test.")
     ap.add_argument("--max_new_tokens", type=int, default=256)
     ap.add_argument("--prompt_only", action="store_true", help="Apply intervention only to prompt tokens.")

@@ -12,7 +12,7 @@ Interlatent is a lightweight interpretability toolkit where you can: save prompt
 ```python
 from interlatent.api import LatentDB
 from interlatent.collectors.llm_collector import LLMCollector
-from interlatent.llm.prompt_dataset import PromptDataset, PromptExample
+from interlatent.analysis.dataset import PromptDataset, PromptExample
 from interlatent.analysis.train import train_linear_probe
 
 # 1) Prompts + labels
@@ -42,10 +42,9 @@ probe = train_linear_probe(db, layer="llm.layer.-1", target_key="prompt_label", 
 ```
 
 ## More Demos
-- Ministral character experiment (dataset, run, visualize): `scripts/demos/ministral/character_ablations/`
-- LLM workflow demo (no downloads): `scripts/demos/ministral/llm_workflow_demo.py`
-- Real HF model demo: `scripts/demos/ministral/llm_real_model_demo.py` (set `RUN_LLM_REAL=1` and `LLM_MODEL`)
-- Prompt labeling demo: `scripts/demos/ministral/prompt_dataset_demo.py`
+- Basic workflows, prompt labeling, and plotting (dummy + HF quickstarts): `demos/basics/`
+- Ministral character experiment (dataset, run, visualize): `demos/ministral_characters_experiment/`
+- Ministral-3 end-to-end demo: `demos/llm/ministral3/`
 
 ## Learn More
 See [GUIDE.md](GUIDE.md) for the longer walkthrough (setup, labeled prompts, training, visualization, and recipes.

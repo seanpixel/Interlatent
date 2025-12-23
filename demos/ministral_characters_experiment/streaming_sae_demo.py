@@ -6,7 +6,7 @@ full activations. Intended as a lightweight alternative to dense logging.
 
 Usage:
   RUN_MINISTRAL3=1 HF_TRUST_REMOTE_CODE=1 PYTHONPATH=. \\
-    python scripts/demos/ministral/character_ablations/streaming_sae_demo.py \\
+    python demos/ministral_characters_experiment/streaming_sae_demo.py \\
       --csv data/character_dilemmas.csv \\
       --model mistralai/Ministral-3-14B-Instruct-2512 \\
       --layer_idx -2 \\
@@ -20,8 +20,8 @@ from pathlib import Path
 
 import torch
 
-from interlatent.llm.prompt_dataset import PromptDataset
-from interlatent.sae.streaming import StreamingSAEConfig, StreamingSAETrainer
+from interlatent.analysis.dataset import PromptDataset
+from interlatent.analysis.train.online_sae_trainer import StreamingSAEConfig, StreamingSAETrainer
 
 
 def load_model_and_tokenizer(model_id: str, trust_remote_code: bool):

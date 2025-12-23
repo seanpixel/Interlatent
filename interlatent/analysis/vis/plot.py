@@ -5,10 +5,10 @@ This is a lightweight, pyplot-based visualizer geared toward quick interpretabil
 passes on small runs. It reads directly from the `activations` table.
 
 Usage (CLI):
-  python -m interlatent.vis.plot latents_llm.db --layer llm.layer.-1 --channel 0 --prompt-index 0 --output out.png
+  python -m interlatent.analysis.vis.plot latents_llm.db --layer llm.layer.-1 --channel 0 --prompt-index 0 --output out.png
 
 Programmatic:
-  from interlatent.vis.plot import plot_activation
+  from interlatent.analysis.vis.plot import plot_activation
   plot_activation("latents_llm.db", layer="llm.layer.-1", channel=0, prompt_index=0)
 """
 from __future__ import annotations

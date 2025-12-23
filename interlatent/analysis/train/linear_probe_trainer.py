@@ -5,8 +5,8 @@ from typing import Literal
 import torch
 from torch.utils.data import DataLoader
 
-from interlatent.analysis.datasets import LinearProbeDataset
-from interlatent.models.linear_probe import LinearProbe
+from interlatent.analysis.dataset import LinearProbeDataset
+from interlatent.analysis.models.linear_probe import LinearProbe
 
 
 def train_linear_probe(

@@ -2,7 +2,7 @@
 Inspect which tokens most strongly activate each latent/channel.
 
 Usage:
-  PYTHONPATH=. python scripts/demos/ministral/character_ablations/top_tokens.py \
+  PYTHONPATH=. python demos/ministral_characters_experiment/top_tokens.py \
     --db latents_character_dilemmas.db \
     --layer latent_sae:llm.layer.30 \
     --topk 10 \

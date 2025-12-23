@@ -17,17 +17,18 @@
     ActivationEvents and metric context into DB. Returns RunInfo.
   - interlatent/collectors/llm_collector.py: Runs a HuggingFace causal LM over prompts, capturing per-token activations into LatentDB.
   - interlatent/metrics.py: Metric protocol + helpers (LambdaMetric, EpisodeAccumulator) that emit one scalar per step.
-  - interlatent/analysis/datasets/activation_pair_dataset.py: Builds paired datasets (pre, post) for a layer using logged activations; each sample is a per-step vector of channel sums.
-  - interlatent/analysis/datasets/linear_probe_dataset.py: Builds (activation vector, target) pairs by reading metrics from activation contexts for linear probe training.
-  - interlatent/analysis/train/trainer.py: Minimal linear encoder/decoder trainer with L1 sparsity.
-  - interlatent/analysis/train/pipeline.py: Orchestrates training a transcoder for one layer: train, save artifact, then backfill latent activations (layer name
+  - interlatent/analysis/dataset/activation_pair_dataset.py: Builds paired datasets (pre, post) for a layer using logged activations; each sample is a per-step vector of channel sums.
+  - interlatent/analysis/dataset/linear_probe_dataset.py: Builds (activation vector, target) pairs by reading metrics from activation contexts for linear probe training.
+  - interlatent/analysis/train/transcoder_trainer.py: Minimal linear encoder/decoder trainer with L1 sparsity.
+  - interlatent/analysis/train/transcoder_pipeline.py: Orchestrates training a transcoder for one layer: train, save artifact, then backfill latent activations (layer name
     latent:{layer}) using the trained encoder so they can be correlated like normal channels.
-  - interlatent/models/linear_transcoder.py: Simple relu bottleneck transcoder module (encoder/decoder).
+  - interlatent/analysis/train/online_sae_trainer.py: Streaming SAE training loop that avoids writing activations to disk.
+  - interlatent/analysis/models/linear_transcoder.py: Simple relu bottleneck transcoder module (encoder/decoder).
 
   Utilities & Scripts
 
   - interlatent/utils/logging.py, hook_utils.py (hook cleanup).
-  - Scripts: scripts/setup_env.sh (conda/mamba env), scripts/run_transcoder.py (+ .sh wrapper) to run collector + transcoder training on a chosen SB3 policy/
+- Scripts: demos under `demos/basics/` (e.g., `run_transcoder.py` to run collector + transcoder training on a chosen SB3 policy)
     env/metrics.
 
   Tests/Examples
