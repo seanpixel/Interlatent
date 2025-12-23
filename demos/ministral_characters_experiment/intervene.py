@@ -63,7 +63,13 @@ def load_model_and_tokenizer(model_id: str, trust_remote_code: bool):
 
 
 def generate(tok, llm, prompt: str, max_new_tokens: int, device: str) -> str:
-    enc = tok([prompt], return_tensors="pt")
+    messages = [{"role": "user", "content": [{"type": "text", "text": prompt}]}]
+    enc = tok.apply_chat_template(
+        messages,
+        add_generation_prompt=True,
+        return_tensors="pt",
+        return_dict=True,
+    )
     input_ids = enc["input_ids"].to(device)
     attn_mask = enc.get("attention_mask")
     if attn_mask is not None:
@@ -86,7 +92,12 @@ def main():
     ap.add_argument("--sae", type=Path, required=True, help="Path to SAE checkpoint (.pth) saved by SAEPipeline.")
     ap.add_argument("--channels", type=int, nargs="+", required=True, help="Latent channels to boost.")
     ap.add_argument("--scale", type=float, default=5.0, help="Scale to apply to each channel.")
-    ap.add_argument("--prompt", type=str, required=True, help="Prompt to test.")
+    ap.add_argument(
+        "--prompt",
+        type=str,
+        required=True,
+        help="Prompt to test (formatted as a user message in the chat template).",
+    )
     ap.add_argument("--max_new_tokens", type=int, default=256)
     ap.add_argument("--prompt_only", action="store_true", help="Apply intervention only to prompt tokens.")
     args = ap.parse_args()
