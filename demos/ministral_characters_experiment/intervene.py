@@ -2,14 +2,7 @@
 Demo: apply latent interventions from an SAE to Ministral and compare outputs.
 
 Usage:
-  RUN_MINISTRAL3=1 HF_TRUST_REMOTE_CODE=1 PYTHONPATH=. \\
-    python demos/ministral_characters_experiment/intervene.py \\
-      --model mistralai/Ministral-3-14B-Instruct-2512 \\
-      --layer llm.layer.30 \\
-      --sae artifacts/sae_llm_layer_30_YYYYMMDD_HHMMSS.pth \\
-      --channels 17 31 \\
-      --scale 3.0 \\
-      --prompt "what's the capital of France?" \\
+RUN_MINISTRAL3=1 HF_TRUST_REMOTE_CODE=1 PYTHONPATH=. python demos/ministral_characters_experiment/intervene.py --model mistralai/Ministral-3-14B-Instruct-2512 --layer llm.layer.30 --sae artifacts/sae_llm_layer_30_YYYYMMDD_HHMMSS.pth --channels 17 31 --scale 3.0 --prompt "what's the capital of France?"
 """
 from __future__ import annotations
 
@@ -19,12 +12,35 @@ from pathlib import Path
 from typing import List
 
 import torch
+import torch.distributed as dist
 
 from interlatent.analysis.intervention import LatentIntervention
 
 
+def _ensure_single_process_group():
+    """
+    Some Transformer loading paths (e.g., caching_allocator_warmup) expect a default
+    process group. If none exists, initialize a local single-process group to avoid
+    get_world_size() errors.
+    """
+    if not dist.is_available() or dist.is_initialized():
+        return False
+    os.environ.setdefault("MASTER_ADDR", "127.0.0.1")
+    os.environ.setdefault("MASTER_PORT", "29500")
+    os.environ.setdefault("RANK", "0")
+    os.environ.setdefault("WORLD_SIZE", "1")
+    try:
+        dist.init_process_group("gloo", rank=0, world_size=1)
+        return True
+    except Exception as exc:  # pragma: no cover - best-effort safeguard
+        print(f"[warn] could not init process group; continuing without distributed init: {exc}")
+        return False
+
+
 def load_model_and_tokenizer(model_id: str, trust_remote_code: bool):
     from transformers import AutoConfig, Mistral3ForConditionalGeneration, MistralCommonBackend
+
+    created_pg = _ensure_single_process_group()
 
     tok = MistralCommonBackend.from_pretrained(model_id, trust_remote_code=trust_remote_code)
     if tok.pad_token_id is None and getattr(tok, "eos_token", None):
@@ -41,6 +57,8 @@ def load_model_and_tokenizer(model_id: str, trust_remote_code: bool):
         device_map={"": device},
     )
     llm.eval()
+    if created_pg and dist.is_initialized():
+        dist.destroy_process_group()
     return tok, llm, device
 
 
