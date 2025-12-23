@@ -90,6 +90,8 @@ class StreamingSAETrainer:
                 raise IndexError(f"layer_index {self.config.layer_index} out of range for {len(hidden_states)} states")
 
             hs = hidden_states[layer_idx]  # (B, S, H)
+            # Ensure dtype matches SAE weights (float32); some models emit bf16.
+            hs = hs.float()
             if self.config.max_channels is not None:
                 hs = hs[:, :, : self.config.max_channels]
             B, S, H = hs.shape
