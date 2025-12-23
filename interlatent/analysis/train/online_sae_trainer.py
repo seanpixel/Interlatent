@@ -90,8 +90,6 @@ class StreamingSAETrainer:
                 raise IndexError(f"layer_index {self.config.layer_index} out of range for {len(hidden_states)} states")
 
             hs = hidden_states[layer_idx]  # (B, S, H)
-            # Ensure dtype matches SAE weights (float32); some models emit bf16.
-            hs = hs.float()
             if self.config.max_channels is not None:
                 hs = hs[:, :, : self.config.max_channels]
             B, S, H = hs.shape
@@ -104,6 +102,7 @@ class StreamingSAETrainer:
             if flat.numel() == 0:
                 continue
 
+            flat = flat.to(device=device, dtype=torch.float32)
             self._lazy_init(flat.shape[-1], device)
 
             if self.config.sample_tokens is not None and flat.shape[0] > self.config.sample_tokens:
