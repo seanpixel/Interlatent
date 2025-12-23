@@ -228,6 +228,34 @@ class LatentDB:
             _LOG.info("[latents] fetch_activations layer=%s rows=%d time=%.2fms", layer, len(rows), (t1 - t0) * 1e3)
         return rows
 
+    def iter_activations(self, *, layer: str, batch_size: int = 1000):
+        """Yield activation batches for a layer (paged to reduce memory)."""
+        t0 = time.perf_counter()
+        total = 0
+        for chunk in self._store.iter_activations(layer, batch_size):  # type: ignore[attr-defined]
+            events = [
+                ActivationEvent(
+                    run_id=r["run_id"],
+                    step=r["step"],
+                    layer=r["layer"],
+                    channel=r["channel"],
+                    prompt=r.get("prompt"),
+                    prompt_index=r.get("prompt_index"),
+                    token_index=r.get("token_index"),
+                    token=r.get("token"),
+                    tensor=json.loads(r["tensor"]),
+                    context=json.loads(r["context"]) if r["context"] else {},
+                )
+                for r in chunk
+            ]
+            total += len(events)
+            if self._write_log_interval:
+                _LOG.info("[latents] iter_activations batch=%d total=%d layer=%s", len(events), total, layer)
+            yield events
+        if self._write_log_interval:
+            t1 = time.perf_counter()
+            _LOG.info("[latents] iter_activations layer=%s total=%d time=%.2fms", layer, total, (t1 - t0) * 1e3)
+
 
     def timeline(
         self,

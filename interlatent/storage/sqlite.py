@@ -279,6 +279,25 @@ class SQLiteBackend(StorageBackend):
         )
         self._conn.commit()
 
+    def iter_activations(self, layer: str, batch_size: int = 1000):
+        offset = 0
+        while True:
+            cur = self._conn.cursor()
+            rows = cur.execute(
+                """
+                SELECT run_id, step, layer, channel, prompt, prompt_index, token_index, token, tensor, context
+                FROM activations
+                WHERE layer = ?
+                ORDER BY step, channel
+                LIMIT ? OFFSET ?
+                """,
+                (layer, batch_size, offset),
+            ).fetchall()
+            if not rows:
+                break
+            yield rows
+            offset += batch_size
+
     def write_statblock(self, sb: StatBlock) -> None:
         cur = self._conn.cursor()
         cur.execute(

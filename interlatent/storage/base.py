@@ -106,3 +106,8 @@ class StorageBackend(abc.ABC):
     @abc.abstractmethod
     def flush(self) -> None:
         """Force-commit any buffered writes to the underlying store."""
+
+    # Optional: paged activation iteration (implement where supported).
+    def iter_activations(self, layer: str, batch_size: int = 1000):
+        """Yield batches of ActivationEvents for the given layer."""
+        raise NotImplementedError

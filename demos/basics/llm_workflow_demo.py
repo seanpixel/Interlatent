@@ -76,6 +76,9 @@ def main():
     tok = DummyTokenizer()
     lm = DummyLM(hidden_size=6, num_hidden_layers=2)
 
+    repeat = int(os.environ.get("REPEAT_PROMPTS", "1"))
+    prompts = ["a b", "a a c"] * max(1, repeat)
+
     def token_metrics_fn(prompt_idx, token_idx, token, **_):
         return {"token_id": token["id"], "token_pos": token_idx}
 
@@ -86,7 +89,7 @@ def main():
         device="cpu",
         token_metrics_fn=token_metrics_fn,
     )
-    collector.run(lm, tok, prompts=["a b", "a a c"], max_new_tokens=0)
+    collector.run(lm, tok, prompts=prompts, max_new_tokens=0)
     print("[collector] rows written:", len(db.fetch_activations(layer="llm.layer.2")))
 
     lp_ds = LinearProbeDataset(db, layer="llm.layer.2", target_key="token_id")
