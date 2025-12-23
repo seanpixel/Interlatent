@@ -107,6 +107,7 @@ def main():
         token_metrics_fn=ds.token_metrics_fn(metric_name="harmful_label"),
     )
     collector.run(lm, tok, prompts=ds.texts, max_new_tokens=0)
+    db.flush()
     base_rows = len(db.fetch_activations(layer="llm.layer.2"))
     print(f"[collector] captured {base_rows} rows on llm.layer.2")
 

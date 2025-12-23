@@ -68,6 +68,8 @@ class SQLiteBackend(StorageBackend):
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(self._path, check_same_thread=False)
         self._conn.row_factory = _dict_factory
+        self._conn.execute("PRAGMA journal_mode=WAL;")
+        self._conn.execute("PRAGMA synchronous=NORMAL;")
         self._ensure_schema()
 
     # ------------------------------------------------------------------

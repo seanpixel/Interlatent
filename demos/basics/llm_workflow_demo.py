@@ -3,6 +3,7 @@ Lightweight, no-pytest demo of the LLM workflow on a dummy HF-like model.
 Run with:  PYTHONPATH=. python demos/basics/llm_workflow_demo.py
 """
 import torch
+import os
 
 from interlatent.api import LatentDB
 from interlatent.collectors.llm_collector import LLMCollector
@@ -90,6 +91,7 @@ def main():
         token_metrics_fn=token_metrics_fn,
     )
     collector.run(lm, tok, prompts=prompts, max_new_tokens=0)
+    db.flush()
     print("[collector] rows written:", len(db.fetch_activations(layer="llm.layer.2")))
 
     lp_ds = LinearProbeDataset(db, layer="llm.layer.2", target_key="token_id")

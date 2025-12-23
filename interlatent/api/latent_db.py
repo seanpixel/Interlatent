@@ -101,7 +101,9 @@ class LatentDB:
         self._write_log_interval = int(os.environ.get("LATENTDB_WRITE_LOG_INTERVAL", "0") or 0)
         # Optional batching to cut round-trips (set LATENTDB_WRITE_BATCH_SIZE=N to enable).
         self._write_batch_size = int(os.environ.get("LATENTDB_WRITE_BATCH_SIZE", "0") or 0)
+        self._write_flush_secs = float(os.environ.get("LATENTDB_WRITE_FLUSH_SECS", "0") or 0)
         self._write_buffer: list[ActivationEvent] = []
+        self._last_flush = time.perf_counter()
 
     # ----------------------- context‑manager sugar -----------------------
     def __enter__(self):
@@ -133,7 +135,10 @@ class LatentDB:
             raise ValueError(f"Invalid ActivationEvent: {e}") from None
         if self._write_batch_size > 0:
             self._write_buffer.append(event)
-            if len(self._write_buffer) >= self._write_batch_size:
+            elapsed = time.perf_counter() - self._last_flush
+            if len(self._write_buffer) >= self._write_batch_size or (
+                self._write_flush_secs and elapsed >= self._write_flush_secs
+            ):
                 self._flush_buffer()
         else:
             self._store.write_event(event)
@@ -314,6 +319,7 @@ class LatentDB:
             for ev in self._write_buffer:
                 self._store.write_event(ev)
         self._write_buffer.clear()
+        self._last_flush = time.perf_counter()
 
     # ---------------------------------------------------------------------
     # Magic methods --------------------------------------------------------

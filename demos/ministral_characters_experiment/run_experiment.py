@@ -77,6 +77,7 @@ def collect(db: LatentDB, tok, llm, dataset: PromptDataset, layer: str, device: 
         max_new_tokens=64,
         batch_size=1,
     )
+    db.flush()
     print("[collect] Done.")
 
 

@@ -49,6 +49,7 @@ def main():
     )
     prompts = ["Hello world", "Why is the sky blue?"]
     collector.run(llm, tok, prompts=prompts, max_new_tokens=0, batch_size=1)
+    db.flush()
     base_rows = len(db.fetch_activations(layer="llm.layer.20"))
     print(f"[collector] captured {base_rows} activations for layer llm.layer.20")
 

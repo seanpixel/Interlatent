@@ -90,6 +90,7 @@ def _build_db(db_path: Path, prompts):
         device="cpu",
     )
     collector.run(lm, tok, prompts=prompts, max_new_tokens=0)
+    db.flush()
 
     pipe = TranscoderPipeline(db, "llm.layer.2", k=4, epochs=1)
     pipe.run()
