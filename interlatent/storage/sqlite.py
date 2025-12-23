@@ -200,61 +200,82 @@ class SQLiteBackend(StorageBackend):
     # ------------------------------------------------------------------
 
     def write_event(self, ev: ActivationEvent) -> None:
+        self.write_events([ev])
+
+    def write_events(self, events: Sequence[ActivationEvent]) -> None:
         cur = self._conn.cursor()
-        metrics: dict[str, float] = ev.context.get("metrics", {})
-        if metrics:                       # skip fast path if none
-            sum_x  = ev.value_sum or sum(ev.tensor)
-            sum_x2 = ev.value_sq_sum or sum(v*v for v in ev.tensor)
-            for name, m in metrics.items():
-                m = float(m)
-                cur.execute(
-                    """
-                    INSERT INTO metric_sums (metric, layer, channel,
-                                            count, sum_m, sum_m2, sum_xm)
-                    VALUES (?, ?, ?, 1, ?, ?, ?)
-                    ON CONFLICT(metric, layer, channel) DO UPDATE SET
-                    count  = count  + 1,
-                    sum_m  = sum_m  + EXCLUDED.sum_m,
-                    sum_m2 = sum_m2 + EXCLUDED.sum_m2,
-                    sum_xm = sum_xm + EXCLUDED.sum_xm
-                    """,
-                    (
-                        name, ev.layer, ev.channel,
-                        m,            # Σ m
-                        m * m,        # Σ m²
-                        sum_x * m,    # Σ x m
-                    ),
+        metric_rows = []
+        stat_rows = []
+        activation_rows = []
+
+        for ev in events:
+            metrics: dict[str, float] = ev.context.get("metrics", {})
+            if metrics:
+                sum_x = ev.value_sum or sum(ev.tensor)
+                sum_x2 = ev.value_sq_sum or sum(v * v for v in ev.tensor)
+                for name, m in metrics.items():
+                    m = float(m)
+                    metric_rows.append(
+                        (
+                            name,
+                            ev.layer,
+                            ev.channel,
+                            m,            # Σ m
+                            m * m,        # Σ m²
+                            sum_x * m,    # Σ x m
+                        )
+                    )
+                    stat_rows.append((ev.layer, ev.channel, sum_x, sum_x2))
+
+            activation_rows.append(
+                (
+                    ev.run_id,
+                    ev.step,
+                    ev.layer,
+                    ev.channel,
+                    ev.prompt,
+                    ev.prompt_index,
+                    ev.token_index,
+                    ev.token,
+                    json.dumps(ev.tensor),
+                    ev.timestamp,
+                    json.dumps(ev.context),
                 )
-                cur.execute(
-                    """
-                    INSERT INTO stats (layer, channel, count, sum_x, sum_x2)
-                    VALUES (?, ?, 1, ?, ?)
-                    ON CONFLICT(layer, channel) DO UPDATE SET
-                    count  = count  + 1,
-                    sum_x  = sum_x  + EXCLUDED.sum_x,
-                    sum_x2 = sum_x2 + EXCLUDED.sum_x2
-                    """,
-                    (ev.layer, ev.channel, sum_x, sum_x2),
-                )                        
-        cur.execute(
+            )
+
+        if metric_rows:
+            cur.executemany(
+                """
+                INSERT INTO metric_sums (metric, layer, channel,
+                                        count, sum_m, sum_m2, sum_xm)
+                VALUES (?, ?, ?, 1, ?, ?, ?)
+                ON CONFLICT(metric, layer, channel) DO UPDATE SET
+                count  = count  + 1,
+                sum_m  = sum_m  + EXCLUDED.sum_m,
+                sum_m2 = sum_m2 + EXCLUDED.sum_m2,
+                sum_xm = sum_xm + EXCLUDED.sum_xm
+                """,
+                metric_rows,
+            )
+            cur.executemany(
+                """
+                INSERT INTO stats (layer, channel, count, sum_x, sum_x2)
+                VALUES (?, ?, 1, ?, ?)
+                ON CONFLICT(layer, channel) DO UPDATE SET
+                count  = count  + 1,
+                sum_x  = sum_x  + EXCLUDED.sum_x,
+                sum_x2 = sum_x2 + EXCLUDED.sum_x2
+                """,
+                stat_rows,
+            )
+
+        cur.executemany(
             """
             INSERT OR REPLACE INTO activations
             (run_id, step, layer, channel, prompt, prompt_index, token_index, token, tensor, timestamp, context)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (
-                ev.run_id,
-                ev.step,
-                ev.layer,
-                ev.channel,
-                ev.prompt,
-                ev.prompt_index,
-                ev.token_index,
-                ev.token,
-                json.dumps(ev.tensor),
-                ev.timestamp,
-                json.dumps(ev.context),
-            ),
+            activation_rows,
         )
         self._conn.commit()
 

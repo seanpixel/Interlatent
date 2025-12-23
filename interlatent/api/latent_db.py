@@ -99,6 +99,9 @@ class LatentDB:
         self._write_count = 0
         self._write_accum = 0.0
         self._write_log_interval = int(os.environ.get("LATENTDB_WRITE_LOG_INTERVAL", "0") or 0)
+        # Optional batching to cut round-trips (set LATENTDB_WRITE_BATCH_SIZE=N to enable).
+        self._write_batch_size = int(os.environ.get("LATENTDB_WRITE_BATCH_SIZE", "0") or 0)
+        self._write_buffer: list[ActivationEvent] = []
 
     # ----------------------- context‑manager sugar -----------------------
     def __enter__(self):
@@ -109,6 +112,7 @@ class LatentDB:
 
     def close(self):
         """Release underlying resources synchronously."""
+        self.flush()
         self._executor.shutdown(wait=True)
         self._store.close()
 
@@ -127,7 +131,12 @@ class LatentDB:
             event = ActivationEvent.parse_obj(event)  # idempotent if already validated
         except ValidationError as e:  # pragma: no cover
             raise ValueError(f"Invalid ActivationEvent: {e}") from None
-        self._store.write_event(event)
+        if self._write_batch_size > 0:
+            self._write_buffer.append(event)
+            if len(self._write_buffer) >= self._write_batch_size:
+                self._flush_buffer()
+        else:
+            self._store.write_event(event)
         t1 = time.perf_counter()
         if self._write_log_interval:
             self._write_count += 1
@@ -256,7 +265,27 @@ class LatentDB:
 
     def flush(self) -> None:
         """Persist any buffered events immediately."""
+        self._flush_buffer()
         self._store.flush()
+
+    # ------------------------------------------------------------------
+    # Internal helpers -------------------------------------------------
+    # ------------------------------------------------------------------
+
+    def _flush_buffer(self) -> None:
+        if not self._write_buffer:
+            return
+        if hasattr(self._store, "write_events"):
+            try:
+                self._store.write_events(self._write_buffer)  # type: ignore[attr-defined]
+            except Exception:
+                # Fall back to single writes on error to avoid data loss.
+                for ev in self._write_buffer:
+                    self._store.write_event(ev)
+        else:
+            for ev in self._write_buffer:
+                self._store.write_event(ev)
+        self._write_buffer.clear()
 
     # ---------------------------------------------------------------------
     # Magic methods --------------------------------------------------------
