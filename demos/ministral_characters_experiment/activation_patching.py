@@ -140,6 +140,12 @@ def token_like_from_prompt(tok, prompt: str, target: str) -> str:
     for t in tokens:
         if target_norm in normalize_token(t):
             return t
+    # Fallback: pick a token piece from target tokenization (use longest piece).
+    target_ids = tok(target, add_special_tokens=False)["input_ids"]
+    target_tokens = tok.convert_ids_to_tokens(target_ids)
+    if target_tokens:
+        target_tokens = sorted(target_tokens, key=lambda s: len(normalize_token(s)), reverse=True)
+        return target_tokens[0]
     return target
 
 
