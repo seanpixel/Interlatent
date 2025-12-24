@@ -133,6 +133,16 @@ def find_token_indices(
     return [], None
 
 
+def token_like_from_prompt(tok, prompt: str, target: str) -> str:
+    enc = tok(prompt, add_special_tokens=False)
+    tokens = tok.convert_ids_to_tokens(enc["input_ids"])
+    target_norm = normalize_token(target)
+    for t in tokens:
+        if target_norm in normalize_token(t):
+            return t
+    return target
+
+
 def hidden_states_at_layer(llm, input_ids, attn_mask, layer_idx: int):
     with torch.no_grad():
         out = llm(
@@ -320,12 +330,8 @@ def main():
 
     if args.latent_db and args.latent_layer:
         try:
-            input_ids_a, _ = encode_prompt(tok, args.prompt_a, device)
-            input_ids_b, _ = encode_prompt(tok, args.prompt_b, device)
-            _, token_a = find_token_indices(tok, input_ids_a[0].tolist(), args.target_a)
-            _, token_b = find_token_indices(tok, input_ids_b[0].tolist(), args.target_b)
-            token_like_a = token_a or args.target_a
-            token_like_b = token_b or args.target_b
+            token_like_a = token_like_from_prompt(tok, args.prompt_a, args.target_a)
+            token_like_b = token_like_from_prompt(tok, args.prompt_b, args.target_b)
             conn = _open_db(args.latent_db)
             table_full = latent_diff(
                 conn,
