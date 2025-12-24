@@ -93,6 +93,10 @@ def encode_prompt(tok, prompt: str, device: str):
     return input_ids, attn_mask
 
 
+def normalize_token(tok: str) -> str:
+    return tok.replace("▁", " ").strip().lower()
+
+
 def find_subsequence(seq: Sequence[int], sub: Sequence[int]) -> List[int]:
     if not sub or len(sub) > len(seq):
         return []
@@ -105,6 +109,28 @@ def find_subsequence(seq: Sequence[int], sub: Sequence[int]) -> List[int]:
     # Prefer the last match to avoid earlier boilerplate tokens.
     start = matches[-1]
     return list(range(start, start + len(sub)))
+
+
+def find_token_indices(
+    tok,
+    input_ids: Sequence[int],
+    target: str,
+) -> tuple[List[int], str | None]:
+    tokens = tok.convert_ids_to_tokens(list(input_ids))
+    target_norm = normalize_token(target)
+    matches = [i for i, t in enumerate(tokens) if target_norm in normalize_token(t)]
+    if matches:
+        idx = matches[-1]
+        return [idx], tokens[idx]
+
+    # Fallback: try exact token ID subsequence for common punctuation variants.
+    variants = [target, f"{target}?", f"{target}.", f"{target}!", f"{target},"]
+    for variant in variants:
+        sub_ids = tok(variant, add_special_tokens=False)["input_ids"]
+        seq_idx = find_subsequence(input_ids, sub_ids)
+        if seq_idx:
+            return seq_idx, tokens[seq_idx[0]]
+    return [], None
 
 
 def hidden_states_at_layer(llm, input_ids, attn_mask, layer_idx: int):
@@ -294,17 +320,35 @@ def main():
 
     if args.latent_db and args.latent_layer:
         try:
+            input_ids_a, _ = encode_prompt(tok, args.prompt_a, device)
+            input_ids_b, _ = encode_prompt(tok, args.prompt_b, device)
+            _, token_a = find_token_indices(tok, input_ids_a[0].tolist(), args.target_a)
+            _, token_b = find_token_indices(tok, input_ids_b[0].tolist(), args.target_b)
+            token_like_a = token_a or args.target_a
+            token_like_b = token_b or args.target_b
             conn = _open_db(args.latent_db)
-            table = latent_diff(
+            table_full = latent_diff(
                 conn,
                 conn,
                 layer=args.latent_layer,
-                token_like_a=args.target_a,
-                token_like_b=args.target_b,
+                prompt_like_a=args.prompt_a,
+                prompt_like_b=args.prompt_b,
                 top=args.topk_diff,
             )
-            print("[sae diff] Top SAE channel diffs for target tokens:")
-            print(table, "\n")
+            table_tokens = latent_diff(
+                conn,
+                conn,
+                layer=args.latent_layer,
+                prompt_like_a=args.prompt_a,
+                prompt_like_b=args.prompt_b,
+                token_like_a=token_like_a,
+                token_like_b=token_like_b,
+                top=args.topk_diff,
+            )
+            print("[sae diff] Top SAE channel diffs (full prompt):")
+            print(table_full, "\n")
+            print("[sae diff] Top SAE channel diffs (target tokens only):")
+            print(table_tokens, "\n")
         except Exception as exc:
             print(f"[warn] SAE diff failed: {exc}")
 
@@ -321,10 +365,8 @@ def main():
     # Compute hidden-state delta between target tokens.
     input_ids_a, attn_mask_a = encode_prompt(tok, args.prompt_a, device)
     input_ids_b, attn_mask_b = encode_prompt(tok, args.prompt_b, device)
-    target_ids_a = tok(args.target_a, add_special_tokens=False)["input_ids"]
-    target_ids_b = tok(args.target_b, add_special_tokens=False)["input_ids"]
-    indices_a = find_subsequence(input_ids_a[0].tolist(), target_ids_a)
-    indices_b = find_subsequence(input_ids_b[0].tolist(), target_ids_b)
+    indices_a, token_a = find_token_indices(tok, input_ids_a[0].tolist(), args.target_a)
+    indices_b, token_b = find_token_indices(tok, input_ids_b[0].tolist(), args.target_b)
     if not indices_a or not indices_b:
         raise RuntimeError("Could not locate target token span in one of the prompts.")
 
@@ -334,8 +376,8 @@ def main():
     vec_b = hs_b[indices_b].mean(dim=0)
     delta = vec_a - vec_b
 
-    print(f"[patch] target-a indices: {indices_a}")
-    print(f"[patch] target-b indices: {indices_b}")
+    print(f"[patch] target-a token: {token_a} indices: {indices_a}")
+    print(f"[patch] target-b token: {token_b} indices: {indices_b}")
 
     cfg = PatchConfig(layer=args.layer, token_indices=indices_b, delta=delta)
     handle = patch_at_tokens(llm, cfg)
