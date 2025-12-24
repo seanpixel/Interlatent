@@ -302,11 +302,61 @@ def _norm_label(token: str | None) -> str:
     return token.replace("▁", " ").strip()
 
 
+def _find_span_by_concat(tokens: List[str], target: str, max_span: int = 4) -> List[int]:
+    target_norm = normalize_token(target).replace(" ", "")
+    if not target_norm:
+        return []
+    toks_norm = [normalize_token(t).replace(" ", "") for t in tokens]
+    for i in range(len(toks_norm)):
+        acc = ""
+        for j in range(i, min(i + max_span, len(toks_norm))):
+            acc += toks_norm[j]
+            if acc == target_norm:
+                return list(range(i, j + 1))
+    return []
+
+
+def _align_sequences(
+    tokens_a: List[str],
+    vals_a: List[Dict[int, float]],
+    tokens_b: List[str],
+    vals_b: List[Dict[int, float]],
+    target_a: str,
+    target_b: str,
+):
+    span_a = _find_span_by_concat(tokens_a, target_a)
+    span_b = _find_span_by_concat(tokens_b, target_b)
+    if not span_a or not span_b:
+        return tokens_a, vals_a, tokens_b, vals_b
+
+    len_a = len(span_a)
+    len_b = len(span_b)
+    if len_a == len_b:
+        return tokens_a, vals_a, tokens_b, vals_b
+
+    if len_a > len_b:
+        pad = len_a - len_b
+        insert_at = span_b[-1] + 1
+        for _ in range(pad):
+            tokens_b.insert(insert_at, "<pad>")
+            vals_b.insert(insert_at, {})
+    else:
+        pad = len_b - len_a
+        insert_at = span_a[-1] + 1
+        for _ in range(pad):
+            tokens_a.insert(insert_at, "<pad>")
+            vals_a.insert(insert_at, {})
+
+    return tokens_a, vals_a, tokens_b, vals_b
+
+
 def build_latent_diff_heatmap(
     db_path: Path,
     latent_layer: str,
     prompt_a: str,
     prompt_b: str,
+    target_a: str,
+    target_b: str,
     *,
     topk: int,
     out_path: Path,
@@ -338,36 +388,51 @@ def build_latent_diff_heatmap(
     if not token_indices:
         raise RuntimeError("No token activations found for prompts in latent DB.")
 
+    tokens_a = [_norm_label(a_tok.get(idx)) for idx in sorted(a_by_idx.keys())]
+    tokens_b = [_norm_label(b_tok.get(idx)) for idx in sorted(b_by_idx.keys())]
+    vals_a = [a_by_idx.get(idx, {}) for idx in sorted(a_by_idx.keys())]
+    vals_b = [b_by_idx.get(idx, {}) for idx in sorted(b_by_idx.keys())]
+
+    tokens_a, vals_a, tokens_b, vals_b = _align_sequences(tokens_a, vals_a, tokens_b, vals_b, target_a, target_b)
+
+    max_len = max(len(tokens_a), len(tokens_b))
+    if len(tokens_a) < max_len:
+        tokens_a.extend(["<pad>"] * (max_len - len(tokens_a)))
+        vals_a.extend([{}] * (max_len - len(vals_a)))
+    if len(tokens_b) < max_len:
+        tokens_b.extend(["<pad>"] * (max_len - len(tokens_b)))
+        vals_b.extend([{}] * (max_len - len(vals_b)))
+
     channels = set()
-    for idx in token_indices:
-        channels.update(a_by_idx.get(idx, {}).keys())
-        channels.update(b_by_idx.get(idx, {}).keys())
+    for idx in range(max_len):
+        channels.update(vals_a[idx].keys())
+        channels.update(vals_b[idx].keys())
     channels = sorted(channels)
 
     # Compute per-channel divergence across all tokens.
     channel_scores = []
     for ch in channels:
         score = 0.0
-        for idx in token_indices:
-            a_val = a_by_idx.get(idx, {}).get(ch, 0.0)
-            b_val = b_by_idx.get(idx, {}).get(ch, 0.0)
+        for idx in range(max_len):
+            a_val = vals_a[idx].get(ch, 0.0)
+            b_val = vals_b[idx].get(ch, 0.0)
             score += abs(b_val - a_val)
         channel_scores.append((ch, score))
     channel_scores.sort(key=lambda x: x[1], reverse=True)
     top_channels = [ch for ch, _ in channel_scores[:topk]]
 
     # Build heatmap: rows=channels, cols=tokens, values=B-A.
-    mat = np.zeros((len(top_channels), len(token_indices)), dtype=float)
+    mat = np.zeros((len(top_channels), max_len), dtype=float)
     for r, ch in enumerate(top_channels):
-        for c, idx in enumerate(token_indices):
-            a_val = a_by_idx.get(idx, {}).get(ch, 0.0)
-            b_val = b_by_idx.get(idx, {}).get(ch, 0.0)
+        for c in range(max_len):
+            a_val = vals_a[c].get(ch, 0.0)
+            b_val = vals_b[c].get(ch, 0.0)
             mat[r, c] = b_val - a_val
 
     labels = []
-    for idx in token_indices:
-        ta = _norm_label(a_tok.get(idx))
-        tb = _norm_label(b_tok.get(idx))
+    for i in range(max_len):
+        ta = tokens_a[i]
+        tb = tokens_b[i]
         if ta == tb:
             labels.append(ta)
         else:
@@ -464,6 +529,8 @@ def main():
                 args.latent_layer,
                 args.prompt_a,
                 args.prompt_b,
+                args.target_a,
+                args.target_b,
                 topk=args.heatmap_topk,
                 out_path=args.heatmap_out,
             )
