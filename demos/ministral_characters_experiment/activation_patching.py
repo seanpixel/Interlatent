@@ -24,6 +24,9 @@ import torch.distributed as dist
 
 from interlatent.analysis.intervention.api import _resolve_layer_module
 from interlatent.analysis.vis.diff import _open_db, latent_diff
+from interlatent.api import LatentDB
+from interlatent.collectors.llm_collector import LLMCollector
+from interlatent.schema import ActivationEvent
 
 
 DEFAULT_PROMPT_A = (
@@ -160,12 +163,105 @@ def patch_at_tokens(llm, cfg: PatchConfig):
     return layer_module.register_forward_hook(_hook)
 
 
+def load_sae_encoder(path: Path) -> torch.nn.Module:
+    ckpt = torch.load(path, map_location="cpu")
+    if not isinstance(ckpt, dict) or "encoder" not in ckpt:
+        raise ValueError("SAE checkpoint missing 'encoder' state dict")
+    enc_state = ckpt["encoder"]
+    weight = enc_state.get("weight")
+    if weight is None:
+        raise ValueError("Encoder state missing weight")
+    latent_dim, hidden_dim = weight.shape
+    bias = "bias" in enc_state
+    encoder = torch.nn.Linear(hidden_dim, latent_dim, bias=bias)
+    encoder.load_state_dict(enc_state)
+    encoder.eval()
+    return encoder
+
+
+def backfill_sae_latents(db: LatentDB, base_layer: str, encoder: torch.nn.Module):
+    latent_layer = f"latent_sae:{base_layer}"
+    events = db.fetch_activations(layer=base_layer)
+    if not events:
+        raise RuntimeError(f"No activations found for layer '{base_layer}'")
+
+    grouped = {}
+    ctx_by_key = {}
+    meta_by_key = {}
+
+    def key_for(ev):
+        if ev.prompt_index is not None and ev.token_index is not None:
+            return (ev.run_id, ev.prompt_index, ev.token_index)
+        return (ev.run_id, ev.step)
+
+    for ev in events:
+        key = key_for(ev)
+        grouped.setdefault(key, {})[ev.channel] = ev.value_sum or sum(ev.tensor)
+        ctx_by_key.setdefault(key, ev.context or {})
+        if key not in meta_by_key:
+            meta_by_key[key] = {
+                "prompt": ev.prompt,
+                "prompt_index": ev.prompt_index,
+                "token_index": ev.token_index,
+                "token": ev.token,
+            }
+
+    encoder.eval()
+    with torch.no_grad():
+        for key, vec_dict in grouped.items():
+            run_id = key[0]
+            step = key[1] if len(key) == 2 else key[1] * 10_000 + key[2]
+            x = torch.tensor([vec_dict[i] for i in sorted(vec_dict)], dtype=torch.float32)
+            z = encoder(x.unsqueeze(0)).squeeze(0)
+            for idx, val in enumerate(z):
+                db.write_event(
+                    ActivationEvent(
+                        run_id=run_id,
+                        step=step,
+                        layer=latent_layer,
+                        channel=idx,
+                        tensor=[float(val)],
+                        prompt=meta_by_key[key]["prompt"],
+                        prompt_index=meta_by_key[key]["prompt_index"],
+                        token_index=meta_by_key[key]["token_index"],
+                        token=meta_by_key[key]["token"],
+                        context=ctx_by_key[key],
+                        value_sum=float(val),
+                        value_sq_sum=float(val * val),
+                    )
+                )
+    db.flush()
+
+
+def collect_to_db(db_path: Path, tok, llm, layer: str, prompts: List[str], device: str):
+    if db_path.exists():
+        db_path.unlink()
+    db = LatentDB(f"sqlite:///{db_path}")
+    collector = LLMCollector(
+        db,
+        layer_indices=[int(layer.split(".")[-1])],
+        max_channels=128,
+        device=device,
+        log_every_prompts=1,
+    )
+    collector.run(
+        llm,
+        tok,
+        prompts=prompts,
+        max_new_tokens=0,
+        batch_size=1,
+    )
+    return db
+
+
 def parse_args():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", type=str, default="mistralai/Ministral-3-14B-Instruct-2512")
     ap.add_argument("--layer", type=str, default="llm.layer.30")
-    ap.add_argument("--latent-db", type=str, default="latents_character_dilemmas.db")
+    ap.add_argument("--latent-db", type=str, default="latents_snitch_report.db")
     ap.add_argument("--latent-layer", type=str, default="latent_sae:llm.layer.30")
+    ap.add_argument("--sae", type=Path, default=Path("artifacts/sae_llm_layer_30_20251217_070930.pth"))
+    ap.add_argument("--no-collect", action="store_true", help="Skip collecting a clean DB for prompts A/B.")
     ap.add_argument("--topk-diff", type=int, default=20)
     ap.add_argument("--prompt-a", type=str, default=DEFAULT_PROMPT_A)
     ap.add_argument("--prompt-b", type=str, default=DEFAULT_PROMPT_B)
@@ -180,6 +276,21 @@ def main():
     if os.environ.get("RUN_MINISTRAL3") != "1":
         print("Set RUN_MINISTRAL3=1 to run (downloads weights); skipping.")
         return
+
+    trust_remote_code = os.environ.get("HF_TRUST_REMOTE_CODE", "1") == "1"
+    tok, llm, device = load_model_and_tokenizer(args.model, trust_remote_code)
+
+    if not args.no_collect and args.latent_db:
+        db_path = Path(args.latent_db)
+        print(f"[collect] Building clean DB at {db_path}...")
+        db = collect_to_db(db_path, tok, llm, args.layer, [args.prompt_a, args.prompt_b], device)
+        if args.sae.exists():
+            print(f"[collect] Backfilling SAE latents from {args.sae}...")
+            encoder = load_sae_encoder(args.sae)
+            backfill_sae_latents(db, args.layer, encoder)
+        else:
+            print(f"[warn] SAE checkpoint not found at {args.sae}; skipping SAE backfill.")
+        db.close()
 
     if args.latent_db and args.latent_layer:
         try:
@@ -196,9 +307,6 @@ def main():
             print(table, "\n")
         except Exception as exc:
             print(f"[warn] SAE diff failed: {exc}")
-
-    trust_remote_code = os.environ.get("HF_TRUST_REMOTE_CODE", "1") == "1"
-    tok, llm, device = load_model_and_tokenizer(args.model, trust_remote_code)
 
     layer_idx = int(args.layer.split(".")[-1])
 
