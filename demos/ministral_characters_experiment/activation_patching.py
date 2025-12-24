@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Sequence
 
+import numpy as np
 import torch
 import torch.distributed as dist
 
