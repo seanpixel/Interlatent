@@ -296,6 +296,97 @@ def collect_to_db(db_path: Path, tok, llm, layer: str, prompts: List[str], devic
     return db
 
 
+def _norm_label(token: str | None) -> str:
+    if not token:
+        return ""
+    return token.replace("▁", " ").strip()
+
+
+def build_latent_diff_heatmap(
+    db_path: Path,
+    latent_layer: str,
+    prompt_a: str,
+    prompt_b: str,
+    *,
+    topk: int,
+    out_path: Path,
+):
+    import matplotlib.pyplot as plt
+
+    db = LatentDB(f"sqlite:///{db_path}")
+    events = db.fetch_activations(layer=latent_layer)
+    db.close()
+
+    def collect_prompt(prompt_text: str):
+        by_idx = {}
+        tok_by_idx = {}
+        for ev in events:
+            if ev.prompt != prompt_text:
+                continue
+            if ev.token_index is None:
+                continue
+            by_idx.setdefault(ev.token_index, {})[ev.channel] = float(
+                ev.value_sum if ev.value_sum is not None else (ev.tensor[0] if ev.tensor else 0.0)
+            )
+            if ev.token_index not in tok_by_idx:
+                tok_by_idx[ev.token_index] = ev.token
+        return by_idx, tok_by_idx
+
+    a_by_idx, a_tok = collect_prompt(prompt_a)
+    b_by_idx, b_tok = collect_prompt(prompt_b)
+    token_indices = sorted(set(a_by_idx.keys()) | set(b_by_idx.keys()))
+    if not token_indices:
+        raise RuntimeError("No token activations found for prompts in latent DB.")
+
+    channels = set()
+    for idx in token_indices:
+        channels.update(a_by_idx.get(idx, {}).keys())
+        channels.update(b_by_idx.get(idx, {}).keys())
+    channels = sorted(channels)
+
+    # Compute per-channel divergence across all tokens.
+    channel_scores = []
+    for ch in channels:
+        score = 0.0
+        for idx in token_indices:
+            a_val = a_by_idx.get(idx, {}).get(ch, 0.0)
+            b_val = b_by_idx.get(idx, {}).get(ch, 0.0)
+            score += abs(b_val - a_val)
+        channel_scores.append((ch, score))
+    channel_scores.sort(key=lambda x: x[1], reverse=True)
+    top_channels = [ch for ch, _ in channel_scores[:topk]]
+
+    # Build heatmap: rows=channels, cols=tokens, values=B-A.
+    mat = np.zeros((len(top_channels), len(token_indices)), dtype=float)
+    for r, ch in enumerate(top_channels):
+        for c, idx in enumerate(token_indices):
+            a_val = a_by_idx.get(idx, {}).get(ch, 0.0)
+            b_val = b_by_idx.get(idx, {}).get(ch, 0.0)
+            mat[r, c] = b_val - a_val
+
+    labels = []
+    for idx in token_indices:
+        ta = _norm_label(a_tok.get(idx))
+        tb = _norm_label(b_tok.get(idx))
+        if ta == tb:
+            labels.append(ta)
+        else:
+            labels.append(f"{ta}|{tb}")
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.figure(figsize=(max(10, len(labels) * 0.35), 4 + len(top_channels) * 0.25))
+    plt.imshow(mat, aspect="auto", cmap="coolwarm")
+    plt.colorbar(label="Activation diff (B - A)")
+    plt.yticks(ticks=range(len(top_channels)), labels=[str(ch) for ch in top_channels])
+    plt.xticks(ticks=range(len(labels)), labels=labels, rotation=60, ha="right")
+    plt.xlabel("Tokens (prompt A | prompt B if different)")
+    plt.ylabel("Top diverging SAE channels")
+    plt.title("Prompt-level SAE latent differences (B - A)")
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=200, bbox_inches="tight")
+    plt.close()
+
+
 def parse_args():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", type=str, default="mistralai/Ministral-3-14B-Instruct-2512")
@@ -305,6 +396,8 @@ def parse_args():
     ap.add_argument("--sae", type=Path, default=Path("artifacts/sae_llm_layer_30_20251217_070930.pth"))
     ap.add_argument("--no-collect", action="store_true", help="Skip collecting a clean DB for prompts A/B.")
     ap.add_argument("--topk-diff", type=int, default=20)
+    ap.add_argument("--heatmap-topk", type=int, default=10)
+    ap.add_argument("--heatmap-out", type=Path, default=Path("vis/snitch_report_latent_diff_heatmap.png"))
     ap.add_argument("--prompt-a", type=str, default=DEFAULT_PROMPT_A)
     ap.add_argument("--prompt-b", type=str, default=DEFAULT_PROMPT_B)
     ap.add_argument("--target-a", type=str, default="snitch")
@@ -363,6 +456,20 @@ def main():
             print(table_tokens, "\n")
         except Exception as exc:
             print(f"[warn] SAE diff failed: {exc}")
+
+    if args.latent_db and args.latent_layer:
+        try:
+            build_latent_diff_heatmap(
+                Path(args.latent_db),
+                args.latent_layer,
+                args.prompt_a,
+                args.prompt_b,
+                topk=args.heatmap_topk,
+                out_path=args.heatmap_out,
+            )
+            print(f"[heatmap] Saved to {args.heatmap_out}\n")
+        except Exception as exc:
+            print(f"[warn] Heatmap failed: {exc}")
 
     layer_idx = int(args.layer.split(".")[-1])
 
