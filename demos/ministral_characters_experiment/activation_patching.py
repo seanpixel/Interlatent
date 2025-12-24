@@ -410,23 +410,16 @@ def build_latent_diff_heatmap(
         channels.update(vals_b[idx].keys())
     channels = sorted(channels)
 
-    # Match diff.py ranking: sort by |mean_B - mean_A| over the full prompt slice.
+    # Rank by mean of per-token diffs (aligned), i.e., sum(B-A)/num_tokens.
     channel_scores = []
     for ch in channels:
-        sum_a = 0.0
-        sum_b = 0.0
-        cnt_a = 0
-        cnt_b = 0
+        diff_sum = 0.0
         for idx in range(max_len):
-            if ch in vals_a[idx]:
-                sum_a += vals_a[idx][ch]
-                cnt_a += 1
-            if ch in vals_b[idx]:
-                sum_b += vals_b[idx][ch]
-                cnt_b += 1
-        mean_a = sum_a / cnt_a if cnt_a else 0.0
-        mean_b = sum_b / cnt_b if cnt_b else 0.0
-        score = abs(mean_b - mean_a)
+            a_val = vals_a[idx].get(ch, 0.0)
+            b_val = vals_b[idx].get(ch, 0.0)
+            diff_sum += (b_val - a_val)
+        mean_diff = diff_sum / max_len if max_len else 0.0
+        score = abs(mean_diff)
         channel_scores.append((ch, score))
     channel_scores.sort(key=lambda x: x[1], reverse=True)
     top_channels = [ch for ch, _ in channel_scores[:topk]]

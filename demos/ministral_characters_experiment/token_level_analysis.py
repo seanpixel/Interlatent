@@ -24,10 +24,9 @@ from interlatent.api import LatentDB
 
 
 DEFAULT_GROUPS = {
-    "i": ["I", "i", "i "],
-    "husband": ["Husband"],
-    "kinda": ["kinda"],
+    "self": ["I", "i", "i ", "me", "my", "mine", "myself"],
     "slang": ["gonna", "wanna", "gotta", "kinda", "sorta", "ya", "y'all", "ain't"],
+    "report": ["report", "reported", "reporting"],
 }
 
 
