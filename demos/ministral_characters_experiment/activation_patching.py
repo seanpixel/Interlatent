@@ -453,6 +453,7 @@ def build_latent_diff_heatmap(
     plt.tight_layout()
     plt.savefig(out_path, dpi=200, bbox_inches="tight")
     plt.close()
+    return channel_scores[:topk]
 
 
 def parse_args():
@@ -527,7 +528,7 @@ def main():
 
     if args.latent_db and args.latent_layer:
         try:
-            build_latent_diff_heatmap(
+            top_scores = build_latent_diff_heatmap(
                 Path(args.latent_db),
                 args.latent_layer,
                 args.prompt_a,
@@ -538,6 +539,10 @@ def main():
                 out_path=args.heatmap_out,
             )
             print(f"[heatmap] Saved to {args.heatmap_out}\n")
+            print("[heatmap] Top channels by mean per-token diff (aligned):")
+            for ch, score in top_scores:
+                print(f"  ch {ch:4d} | mean_diff_abs={score:.4f}")
+            print()
         except Exception as exc:
             print(f"[warn] Heatmap failed: {exc}")
 
