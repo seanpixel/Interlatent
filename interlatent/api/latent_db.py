@@ -100,7 +100,7 @@ class LatentDB:
         self._write_accum = 0.0
         self._write_log_interval = int(os.environ.get("LATENTDB_WRITE_LOG_INTERVAL", "0") or 0)
         # Optional batching to cut round-trips (set LATENTDB_WRITE_BATCH_SIZE=N to enable).
-        self._write_batch_size = int(os.environ.get("LATENTDB_WRITE_BATCH_SIZE", "0") or 0)
+        self._write_batch_size = int(os.environ.get("LATENTDB_WRITE_BATCH_SIZE", "0") or 400)
         self._write_flush_secs = float(os.environ.get("LATENTDB_WRITE_FLUSH_SECS", "0") or 0)
         self._write_buffer: list[ActivationEvent] = []
         self._last_flush = time.perf_counter()
