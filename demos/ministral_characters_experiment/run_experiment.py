@@ -59,11 +59,11 @@ def load_model_and_tokenizer(model_id: str, trust_remote_code: bool):
     return tok, llm, device
 
 
-def collect(db: LatentDB, tok, llm, dataset: PromptDataset, layer: str, device: str):
+def collect(db: LatentDB, tok, llm, dataset: PromptDataset, layer: str, device: str, max_channels: int | None):
     collector = LLMCollector(
         db,
         layer_indices=[int(layer.split(".")[-1]) if layer.startswith("llm.layer.") else layer],
-        max_channels=128,
+        max_channels=max_channels,
         device=device,
         prompt_context_fn=dataset.prompt_context_fn(),
         token_metrics_fn=dataset.token_metrics_fn(metric_name="prompt_label"),
@@ -81,6 +81,16 @@ def collect(db: LatentDB, tok, llm, dataset: PromptDataset, layer: str, device: 
     print("[collect] Done.")
 
 
+def resolve_db_uri(db_arg: str) -> tuple[str, Path | None]:
+    if "://" in db_arg:
+        if db_arg.startswith(("sqlite:///", "file:///", "hdf5:///", "h5:///")):
+            path = Path(db_arg.split(":///", 1)[1])
+            return db_arg, path
+        return db_arg, None
+    path = Path(db_arg)
+    return f"sqlite:///{path}", path
+
+
 def run(args):
     if os.environ.get("RUN_MINISTRAL3") != "1":
         print("Set RUN_MINISTRAL3=1 to run (downloads weights); skipping.")
@@ -94,12 +104,13 @@ def run(args):
     tok, llm, device = load_model_and_tokenizer(args.model, trust_remote_code)
     print(f"[load] Model on {device}")
 
-    db_path = Path(args.db)
-    if db_path.exists():
+    os.environ["LATENTDB_MAX_CHANNELS"] = str(args.max_channels)
+    db_uri, db_path = resolve_db_uri(args.db)
+    if db_path is not None and db_path.exists():
         db_path.unlink()
-    db = LatentDB(f"sqlite:///{db_path}")
+    db = LatentDB(db_uri)
 
-    collect(db, tok, llm, dataset, args.layer, device)
+    collect(db, tok, llm, dataset, args.layer, device, args.max_channels)
     base_rows = len(db.fetch_activations(layer=args.layer))
     print(f"[collector] captured {base_rows} activations for layer {args.layer}")
 
@@ -123,7 +134,7 @@ def run(args):
     print(f"[sae] latent rows={len(sae_latents)}, encoder_shape={tuple(sae_model.encoder.weight.shape)}")
 
     db.close()
-    print(f"Done. DB at {db_path}, completions in completions_character_dilemmas.jsonl.")
+    print(f"Done. DB at {db_uri}, completions in completions_character_dilemmas.jsonl.")
 
 
 def parse_args():
@@ -132,6 +143,12 @@ def parse_args():
     ap.add_argument("--model", type=str, default="mistralai/Ministral-3-14B-Instruct-2512")
     ap.add_argument("--layer", type=str, default="llm.layer.8")
     ap.add_argument("--db", type=str, default="latents_character_dilemmas.db")
+    ap.add_argument(
+        "--max_channels",
+        type=int,
+        default=int(os.environ.get("MAX_CHANNELS", "128")),
+        help="Limit the number of channels to record per layer (default from MAX_CHANNELS or 128).",
+    )
     ap.add_argument("--probe_epochs", type=int, default=1)
     ap.add_argument("--transcoder_k", type=int, default=8)
     ap.add_argument("--transcoder_epochs", type=int, default=1)

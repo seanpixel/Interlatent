@@ -14,6 +14,7 @@ import json
 import pathlib
 import sqlite3
 import time
+import os
 from collections import defaultdict
 from typing import Iterable, List, Sequence, Tuple
 
@@ -70,6 +71,7 @@ class SQLiteBackend(StorageBackend):
         self._conn.row_factory = _dict_factory
         self._conn.execute("PRAGMA journal_mode=WAL;")
         self._conn.execute("PRAGMA synchronous=NORMAL;")
+        self._hidden_dim = int(os.environ.get("LATENTDB_MAX_CHANNELS", "0") or 0) or None
         self._ensure_schema()
 
     # ------------------------------------------------------------------
@@ -281,12 +283,17 @@ class SQLiteBackend(StorageBackend):
         for (run_id, step, layer), batch in batches.items():
             vec = batch["vec"]
             if vec:
-                max_ch = max(vec.keys())
-                tensor = [0.0] * (max_ch + 1)
+                if self._hidden_dim is not None:
+                    tensor = [0.0] * self._hidden_dim
+                else:
+                    max_ch = max(vec.keys())
+                    tensor = [0.0] * (max_ch + 1)
                 for ch, val in vec.items():
+                    if self._hidden_dim is not None and ch >= self._hidden_dim:
+                        raise ValueError(f"channel {ch} exceeds hidden_dim {self._hidden_dim}")
                     tensor[int(ch)] = float(val)
             else:
-                tensor = []
+                tensor = [0.0] * (self._hidden_dim or 0)
             activation_rows.append(
                 (
                     run_id,

@@ -75,13 +75,28 @@ def parse_args():
     ap.add_argument("--sqlite", type=Path, default=Path("bench_sqlite.db"))
     ap.add_argument("--hdf5", type=Path, default=Path("bench_hdf5.h5"))
     ap.add_argument("--batch-size", type=int, default=512, help="LATENTDB_WRITE_BATCH_SIZE")
+    ap.add_argument(
+        "--no-align-batch",
+        action="store_true",
+        help="Disable batch-size alignment (may split steps across flushes).",
+    )
     ap.add_argument("--keep", action="store_true", help="Keep benchmark DB files.")
     return ap.parse_args()
 
 
 def main():
     args = parse_args()
+    os.environ["LATENTDB_MAX_CHANNELS"] = str(args.channels)
     events = build_events(args.events, args.channels, args.layer, run_id="bench")
+
+    batch_size = args.batch_size
+    if not args.no_align_batch:
+        aligned = (batch_size // args.channels) * args.channels
+        if aligned <= 0:
+            aligned = args.channels
+        if aligned != batch_size:
+            print(f"[setup] aligning batch_size {batch_size} -> {aligned} (channels={args.channels})")
+        batch_size = aligned
 
     sqlite_uri = f"sqlite:///{args.sqlite}"
     hdf5_uri = f"hdf5:///{args.hdf5}"
@@ -92,15 +107,15 @@ def main():
         args.hdf5.unlink()
 
     print(f"[setup] events={len(events)} steps={args.events} channels={args.channels}")
-    print(f"[setup] batch_size={args.batch_size}")
+    print(f"[setup] batch_size={batch_size}")
 
     print("\n[sqlite] timing...")
-    sqlite_stats = time_write_read(sqlite_uri, events, args.layer, args.batch_size)
+    sqlite_stats = time_write_read(sqlite_uri, events, args.layer, batch_size)
     print(f"write: {sqlite_stats['write_s']:.3f}s | fetch: {sqlite_stats['fetch_s']:.3f}s | iter: {sqlite_stats['iter_s']:.3f}s")
     print(f"rows(fetch)={sqlite_stats['rows']} rows(iter)={sqlite_stats['rows_iter']}")
 
     print("\n[hdf5] timing...")
-    hdf5_stats = time_write_read(hdf5_uri, events, args.layer, args.batch_size)
+    hdf5_stats = time_write_read(hdf5_uri, events, args.layer, batch_size)
     print(f"write: {hdf5_stats['write_s']:.3f}s | fetch: {hdf5_stats['fetch_s']:.3f}s | iter: {hdf5_stats['iter_s']:.3f}s")
     print(f"rows(fetch)={hdf5_stats['rows']} rows(iter)={hdf5_stats['rows_iter']}")
 
