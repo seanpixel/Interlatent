@@ -111,7 +111,8 @@ def run(args):
     db = LatentDB(db_uri)
 
     collect(db, tok, llm, dataset, args.layer, device, args.max_channels)
-    base_rows = len(db.fetch_activations(layer=args.layer))
+    base_x, _ = db.fetch_vectors(layer=args.layer)
+    base_rows = int(base_x.shape[0]) if base_x.size else 0
     print(f"[collector] captured {base_rows} activations for layer {args.layer}")
 
     lp_ds = LinearProbeDataset(db, layer=args.layer, target_key="prompt_label")
@@ -124,14 +125,16 @@ def run(args):
     print("[transcoder] Training...")
     pipe = TranscoderPipeline(db, args.layer, k=args.transcoder_k, epochs=args.transcoder_epochs)
     trainer = pipe.run()
-    latent_events = db.fetch_activations(layer=f"latent:{args.layer}")
-    print(f"[transcoder] latent rows={len(latent_events)}, encoder_shape={tuple(trainer.T.weight.shape)}")
+    latent_x, _ = db.fetch_vectors(layer=f"latent:{args.layer}")
+    latent_rows = int(latent_x.shape[0]) if latent_x.size else 0
+    print(f"[transcoder] latent rows={latent_rows}, encoder_shape={tuple(trainer.T.weight.shape)}")
 
     print("[sae] Training...")
     sae_pipe = SAEPipeline(db, args.layer, k=args.sae_k, epochs=args.sae_epochs)
     sae_model = sae_pipe.run()
-    sae_latents = db.fetch_activations(layer=f"latent_sae:{args.layer}")
-    print(f"[sae] latent rows={len(sae_latents)}, encoder_shape={tuple(sae_model.encoder.weight.shape)}")
+    sae_latents_x, _ = db.fetch_vectors(layer=f"latent_sae:{args.layer}")
+    sae_latent_rows = int(sae_latents_x.shape[0]) if sae_latents_x.size else 0
+    print(f"[sae] latent rows={sae_latent_rows}, encoder_shape={tuple(sae_model.encoder.weight.shape)}")
 
     db.close()
     print(f"Done. DB at {db_uri}, completions in completions_character_dilemmas.jsonl.")
