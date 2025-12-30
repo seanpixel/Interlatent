@@ -114,7 +114,12 @@ def run(args):
     print(f"[load] Model on {device}")
 
     if args.all_channels:
-        hidden_size = int(getattr(config, "hidden_size", 0) or 0)
+        hidden_size = int(
+            getattr(config, "hidden_size", 0)
+            or getattr(config, "d_model", 0)
+            or getattr(config, "n_embd", 0)
+            or 0
+        )
         if hidden_size <= 0:
             raise ValueError("Model config missing hidden_size; set --max_channels manually.")
         args.max_channels = hidden_size
