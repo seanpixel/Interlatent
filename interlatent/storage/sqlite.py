@@ -97,6 +97,12 @@ class SQLiteBackend(StorageBackend):
             ) WITHOUT ROWID;
             """
         )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_activations_layer_step
+            ON activations(layer, step);
+            """
+        )
         # Backward‑compatible add of new columns for prompt/token metadata.
         _ensure_column(cur, "activations", "prompt TEXT")
         _ensure_column(cur, "activations", "prompt_index INTEGER")
@@ -319,28 +325,38 @@ class SQLiteBackend(StorageBackend):
         self._conn.commit()
 
     def iter_activations(self, layer: str, batch_size: int = 1000):
-        offset = 0
+        cur = self._conn.cursor()
+        cur.execute(
+            """
+            SELECT run_id, step, layer, prompt, prompt_index, token_index, token, tensor, context
+            FROM activations
+            WHERE layer = ?
+            ORDER BY step
+            """,
+            (layer,),
+        )
+        loads = json.loads
+        ctx_cache: dict[str, dict] = {}
+        ActivationEventLocal = ActivationEvent
         while True:
-            cur = self._conn.cursor()
-            rows = cur.execute(
-                """
-                SELECT run_id, step, layer, prompt, prompt_index, token_index, token, tensor, context
-                FROM activations
-                WHERE layer = ?
-                ORDER BY step
-                LIMIT ? OFFSET ?
-                """,
-                (layer, batch_size, offset),
-            ).fetchall()
+            rows = cur.fetchmany(batch_size)
             if not rows:
                 break
             events: list[ActivationEvent] = []
+            append = events.append
             for r in rows:
-                tensor = json.loads(r["tensor"] or "[]")
-                ctx = json.loads(r["context"]) if r["context"] else {}
+                tensor = loads(r["tensor"] or "[]")
+                ctx_text = r["context"] or ""
+                if ctx_text:
+                    ctx = ctx_cache.get(ctx_text)
+                    if ctx is None:
+                        ctx = loads(ctx_text)
+                        ctx_cache[ctx_text] = ctx
+                else:
+                    ctx = {}
                 for ch, val in enumerate(tensor):
-                    events.append(
-                        ActivationEvent(
+                    append(
+                        ActivationEventLocal(
                             run_id=r["run_id"],
                             step=r["step"],
                             layer=r["layer"],
@@ -356,7 +372,6 @@ class SQLiteBackend(StorageBackend):
                         )
                     )
             yield events
-            offset += batch_size
 
     def write_statblock(self, sb: StatBlock) -> None:
         cur = self._conn.cursor()
@@ -448,13 +463,24 @@ class SQLiteBackend(StorageBackend):
             sql += " LIMIT ?"
             params.append(limit)
         rows = cur.execute(sql, params).fetchall()
+        loads = json.loads
+        ctx_cache: dict[str, dict] = {}
         events: list[ActivationEvent] = []
+        append = events.append
+        ActivationEventLocal = ActivationEvent
         for r in rows:
-            tensor = json.loads(r["tensor"] or "[]")
-            ctx = json.loads(r["context"]) if r["context"] else {}
+            tensor = loads(r["tensor"] or "[]")
+            ctx_text = r["context"] or ""
+            if ctx_text:
+                ctx = ctx_cache.get(ctx_text)
+                if ctx is None:
+                    ctx = loads(ctx_text)
+                    ctx_cache[ctx_text] = ctx
+            else:
+                ctx = {}
             for ch, val in enumerate(tensor):
-                events.append(
-                    ActivationEvent(
+                append(
+                    ActivationEventLocal(
                         run_id=r["run_id"],
                         step=r["step"],
                         layer=r["layer"],

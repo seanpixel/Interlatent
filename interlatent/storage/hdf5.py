@@ -444,6 +444,8 @@ class HDF5Backend(StorageBackend):
         run_ids = self._string_tables["run_ids"]
 
         events: list[ActivationEvent] = []
+        ActivationEventLocal = ActivationEvent
+        append = events.append
         for i in range(n):
             cid = int(context_id[i])
             if cid >= 0:
@@ -458,8 +460,8 @@ class HDF5Backend(StorageBackend):
             run_id = run_ids[run_id_id[i]] if run_id_id[i] >= 0 else ""
             row_vals = x[i].tolist()
             for ch, val in enumerate(row_vals):
-                events.append(
-                    ActivationEvent(
+                append(
+                    ActivationEventLocal(
                         run_id=run_id,
                         step=int(step[i]),
                         layer=layer,
@@ -521,6 +523,8 @@ class HDF5Backend(StorageBackend):
             context_id = grp["context_id"][start:end]
             run_id_id = grp["run_id_id"][start:end]
             events: list[ActivationEvent] = []
+            ActivationEventLocal = ActivationEvent
+            append = events.append
             for i in range(end - start):
                 cid = int(context_id[i])
                 if cid >= 0:
@@ -535,8 +539,8 @@ class HDF5Backend(StorageBackend):
                 run_id = run_ids[run_id_id[i]] if run_id_id[i] >= 0 else ""
                 row_vals = x[i].tolist()
                 for ch, val in enumerate(row_vals):
-                    events.append(
-                        ActivationEvent(
+                    append(
+                        ActivationEventLocal(
                             run_id=run_id,
                             step=int(step[i]),
                             layer=layer,
