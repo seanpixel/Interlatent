@@ -153,39 +153,41 @@ class LLMCollector:
             ]
 
             # hidden_states is a tuple(len = num_layers+1) of tensors (B, seq, hidden)
-            for layer_idx in self._resolve_layers(len(hidden_states)):
-                layer_tensor = hidden_states[layer_idx]  # (B, S, H)
-                B, S, H = layer_tensor.shape
-                if self.max_channels is not None:
-                    H = min(H, self.max_channels)
-                    layer_tensor = layer_tensor[:, :, :H]
+            layer_indices = self._resolve_layers(len(hidden_states))
+            for b_idx, prompt_text in enumerate(batch):
+                prompt_idx = i + b_idx
+                if attn_mask_full is not None:
+                    prompt_len = int(attn_mask_full[b_idx].ne(0).sum().item())
+                else:
+                    prompt_len = seq_tokens.shape[1]
+                if prompt_len <= 0:
+                    prompt_len = seq_tokens.shape[1]
+                prompt_len = min(prompt_len, seq_tokens.shape[1])
+                seq_ids = seq_tokens[b_idx][:prompt_len].tolist()
+                seq_tokens_str = tokens_decoded[b_idx][:prompt_len]
 
-                layer_name = f"llm.layer.{layer_idx}"
+                prompt_ctx = {}
+                if self.prompt_context_fn is not None:
+                    try:
+                        prompt_ctx = self.prompt_context_fn(prompt_text, prompt_idx) or {}
+                    except Exception as exc:  # pragma: no cover - defensive
+                        _LOG.warning("prompt_context_fn failed: %s", exc)
 
-                for b_idx, prompt_text in enumerate(batch):
-                    prompt_idx = i + b_idx
-                    if attn_mask_full is not None:
-                        prompt_len = int(attn_mask_full[b_idx].ne(0).sum().item())
-                    else:
-                        prompt_len = seq_tokens.shape[1]
-                    if prompt_len <= 0:
-                        prompt_len = seq_tokens.shape[1]
-                    prompt_len = min(prompt_len, layer_tensor.shape[1], seq_tokens.shape[1])
-                    seq_ids = seq_tokens[b_idx][:prompt_len].tolist()
-                    seq_tokens_str = tokens_decoded[b_idx][:prompt_len]
-
-                    prompt_ctx = {}
-                    if self.prompt_context_fn is not None:
-                        try:
-                            prompt_ctx = self.prompt_context_fn(prompt_text, prompt_idx) or {}
-                        except Exception as exc:  # pragma: no cover - defensive
-                            _LOG.warning("prompt_context_fn failed: %s", exc)
-
-                    for token_idx in range(prompt_len):
-                        token_val = {
-                            "id": seq_ids[token_idx],
-                            "text": seq_tokens_str[token_idx] if token_idx < len(seq_tokens_str) else None,
-                        }
+                max_len = min(
+                    prompt_len,
+                    min(hidden_states[idx].shape[1] for idx in layer_indices),
+                )
+                for token_idx in range(max_len):
+                    token_val = {
+                        "id": seq_ids[token_idx],
+                        "text": seq_tokens_str[token_idx] if token_idx < len(seq_tokens_str) else None,
+                    }
+                    for layer_idx in layer_indices:
+                        layer_tensor = hidden_states[layer_idx]  # (B, S, H)
+                        _, _, H = layer_tensor.shape
+                        if self.max_channels is not None:
+                            H = min(H, self.max_channels)
+                        layer_name = f"llm.layer.{layer_idx}"
 
                         for ch in range(H):
                             val = float(layer_tensor[b_idx, token_idx, ch].item())
@@ -230,17 +232,17 @@ class LLMCollector:
                                     context=ctx,
                                 )
                             )
-                        event_step += 1
+                    event_step += 1
 
-                    processed_prompts += 1
-                    if self.log_every_prompts and processed_prompts >= next_log:
-                        _LOG.info(
-                            "LLMCollector progress: %d/%d prompts processed (run_id=%s)",
-                            processed_prompts,
-                            len(prompts),
-                            run_id,
-                        )
-                        next_log += self.log_every_prompts
+                processed_prompts += 1
+                if self.log_every_prompts and processed_prompts >= next_log:
+                    _LOG.info(
+                        "LLMCollector progress: %d/%d prompts processed (run_id=%s)",
+                        processed_prompts,
+                        len(prompts),
+                        run_id,
+                    )
+                    next_log += self.log_every_prompts
 
         self.db.flush()
         _LOG.info("LLM collection finished: %s (%d prompts)", run_id, len(prompts))
