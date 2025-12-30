@@ -38,7 +38,7 @@ def build_events(num_steps: int, channels: int, layer: str, run_id: str):
     return events
 
 
-def time_write_read(db_uri: str, events, layer: str, batch_size: int, read_mode: str):
+def time_write_read(db_uri: str, events, layer: str, batch_size: int, read_mode: str, steps: int):
     os.environ["LATENTDB_WRITE_BATCH_SIZE"] = str(batch_size)
     db = LatentDB(db_uri)
 
@@ -65,13 +65,30 @@ def time_write_read(db_uri: str, events, layer: str, batch_size: int, read_mode:
             tensors = cur.fetchall()
             _ = [r["tensor"] for r in tensors]
         elif hasattr(store, "_file"):
-            grp = store._file["activations"].get(layer.replace("/", "_"))
-            size = int(grp.attrs.get("size", 0)) if grp is not None else 0
-            if grp is not None and size > 0:
-                _ = grp["x"][:size]
+            if "activations" in store._file:
+                grp = store._file["activations"].get(layer.replace("/", "_"))
+                size = int(grp.attrs.get("size", 0)) if grp is not None else 0
+                if grp is not None and size > 0:
+                    _ = grp["x"][:size]
+            elif "runs" in store._file:
+                run = store._file["runs"].get("bench")
+                if run is not None:
+                    layer_id = store._string_maps["layers"].get(layer)
+                    if layer_id is not None:
+                        act = run["layers"].get(str(layer_id))
+                        if act is not None:
+                            _ = act["act"][:steps]
+        t3 = time.perf_counter()
+    elif read_mode == "vector":
+        x, _ = db.fetch_vectors(layer=layer)
+        _ = x.shape
+        t3 = time.perf_counter()
+    elif read_mode == "block":
+        x, _ = db.get_block(run_id="bench", layer=layer, start=0, end=steps)
+        _ = x.shape
         t3 = time.perf_counter()
     else:
-        raise ValueError("read_mode must be 'expanded' or 'rows'")
+        raise ValueError("read_mode must be 'expanded', 'rows', 'vector', or 'block'")
 
     db.close()
     return {
@@ -99,9 +116,9 @@ def parse_args():
     ap.add_argument(
         "--read-mode",
         type=str,
-        choices=["expanded", "rows"],
+        choices=["expanded", "rows", "vector", "block"],
         default="expanded",
-        help="expanded=ActivationEvent expansion; rows=raw row reads only.",
+        help="expanded=ActivationEvent expansion; rows=raw row reads only; vector=fetch_vectors; block=get_block.",
     )
     ap.add_argument("--keep", action="store_true", help="Keep benchmark DB files.")
     return ap.parse_args()
@@ -133,22 +150,35 @@ def main():
     print(f"[setup] batch_size={batch_size}")
 
     print("\n[sqlite] timing...")
-    sqlite_stats = time_write_read(sqlite_uri, events, args.layer, batch_size, args.read_mode)
+    sqlite_stats = time_write_read(sqlite_uri, events, args.layer, batch_size, args.read_mode, args.events)
     print(f"write: {sqlite_stats['write_s']:.3f}s | fetch: {sqlite_stats['fetch_s']:.3f}s | iter: {sqlite_stats['iter_s']:.3f}s")
     if args.read_mode == "expanded":
         print(f"rows(fetch)={sqlite_stats['rows']} rows(iter)={sqlite_stats['rows_iter']}")
 
     print("\n[hdf5] timing...")
-    hdf5_stats = time_write_read(hdf5_uri, events, args.layer, batch_size, args.read_mode)
+    hdf5_stats = time_write_read(hdf5_uri, events, args.layer, batch_size, args.read_mode, args.events)
     print(f"write: {hdf5_stats['write_s']:.3f}s | fetch: {hdf5_stats['fetch_s']:.3f}s | iter: {hdf5_stats['iter_s']:.3f}s")
     if args.read_mode == "expanded":
         print(f"rows(fetch)={hdf5_stats['rows']} rows(iter)={hdf5_stats['rows_iter']}")
+
+    hdf5v2_path = args.hdf5.with_suffix(".v2.h5")
+    hdf5v2_uri = f"hdf5v2:///{hdf5v2_path}"
+    if hdf5v2_path.exists():
+        hdf5v2_path.unlink()
+
+    print("\n[hdf5v2] timing...")
+    hdf5v2_stats = time_write_read(hdf5v2_uri, events, args.layer, batch_size, args.read_mode, args.events)
+    print(f"write: {hdf5v2_stats['write_s']:.3f}s | fetch: {hdf5v2_stats['fetch_s']:.3f}s | iter: {hdf5v2_stats['iter_s']:.3f}s")
+    if args.read_mode == "expanded":
+        print(f"rows(fetch)={hdf5v2_stats['rows']} rows(iter)={hdf5v2_stats['rows_iter']}")
 
     if not args.keep:
         if args.sqlite.exists():
             args.sqlite.unlink()
         if args.hdf5.exists():
             args.hdf5.unlink()
+        if hdf5v2_path.exists():
+            hdf5v2_path.unlink()
 
 
 if __name__ == "__main__":

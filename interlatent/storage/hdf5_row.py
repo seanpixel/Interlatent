@@ -137,7 +137,6 @@ class HDF5RowBackend(StorageBackend):
                 maxshape=(None,),
                 dtype=step_dtype,
                 chunks=(self._chunk_rows,),
-                fillvalue=(-1, -1, -1, -1, -1),
             )
             return grp
         return runs[run_id]
