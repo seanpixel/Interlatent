@@ -159,24 +159,41 @@ class HDF5Backend(StorageBackend):
                 del self._pending[key]
         if not ready:
             return
-        per_layer = {}
+        per_layer: dict[str, list[dict]] = {}
         for (run_id, step, layer), rec in ready:
-            per_layer.setdefault(layer, []).append((run_id, step, rec))
+            per_layer.setdefault(layer, []).append(
+                {
+                    "vec": rec["vec"],
+                    "step": int(step),
+                    "prompt_index": int(rec["prompt_index"]),
+                    "token_index": int(rec["token_index"]),
+                    "prompt_id": int(rec["prompt_id"]),
+                    "token_id": int(rec["token_id"]),
+                    "context_id": int(rec["context_id"]),
+                    "run_id_id": int(rec["run_id_id"]),
+                }
+            )
         for layer, rows in per_layer.items():
-            hidden_dim = rows[0][2]["hidden_dim"]
-            grp = self._get_layer_group(layer, hidden_dim)
-            size = self._ensure_capacity(grp, len(rows))
-            for i, (run_id, step, rec) in enumerate(rows):
-                idx = size + i
-                grp["x"][idx, :] = rec["vec"]
-                grp["step"][idx] = int(step)
-                grp["prompt_index"][idx] = int(rec["prompt_index"])
-                grp["token_index"][idx] = int(rec["token_index"])
-                grp["prompt_id"][idx] = int(rec["prompt_id"])
-                grp["token_id"][idx] = int(rec["token_id"])
-                grp["context_id"][idx] = int(rec["context_id"])
-                grp["run_id_id"][idx] = int(rec["run_id_id"])
-            grp.attrs["size"] = size + len(rows)
+            self._append_rows(layer, rows)
+
+    def _append_rows(self, layer: str, rows: Sequence[dict]) -> None:
+        if not rows:
+            return
+        hidden_dim = int(rows[0]["vec"].shape[0])
+        grp = self._get_layer_group(layer, hidden_dim)
+        size = self._ensure_capacity(grp, len(rows))
+        end = size + len(rows)
+
+        x = np.stack([r["vec"] for r in rows], axis=0)
+        grp["x"][size:end, :] = x
+        grp["step"][size:end] = np.asarray([r["step"] for r in rows], dtype=np.int64)
+        grp["prompt_index"][size:end] = np.asarray([r["prompt_index"] for r in rows], dtype=np.int32)
+        grp["token_index"][size:end] = np.asarray([r["token_index"] for r in rows], dtype=np.int32)
+        grp["prompt_id"][size:end] = np.asarray([r["prompt_id"] for r in rows], dtype=np.int32)
+        grp["token_id"][size:end] = np.asarray([r["token_id"] for r in rows], dtype=np.int32)
+        grp["context_id"][size:end] = np.asarray([r["context_id"] for r in rows], dtype=np.int32)
+        grp["run_id_id"][size:end] = np.asarray([r["run_id_id"] for r in rows], dtype=np.int32)
+        grp.attrs["size"] = end
 
     # ------------------------------------------------------------------
     # Write methods ------------------------------------------------------
@@ -186,39 +203,105 @@ class HDF5Backend(StorageBackend):
         self.write_events([ev])
 
     def write_events(self, events: Sequence[ActivationEvent]) -> None:
+        hidden_dim = self._hidden_dim_default
+        if hidden_dim is None:
+            raise ValueError("LATENTDB_MAX_CHANNELS must be set for HDF5 backend.")
+
+        grouped: dict[tuple[str, int, str], dict] = {}
         for ev in events:
-            hidden_dim = self._hidden_dim_default
-            if hidden_dim is None:
-                raise ValueError("LATENTDB_MAX_CHANNELS must be set for HDF5 backend.")
             key = (ev.run_id, ev.step, ev.layer)
             rec = self._pending.get(key)
+            if rec is not None:
+                if ev.channel >= rec["hidden_dim"]:
+                    raise ValueError(
+                        f"channel {ev.channel} exceeds hidden_dim {rec['hidden_dim']}; "
+                        "set LATENTDB_MAX_CHANNELS to the collector max_channels"
+                    )
+                if ev.channel not in rec["seen"]:
+                    rec["count"] += 1
+                    rec["seen"].add(ev.channel)
+                rec["vec"][ev.channel] = float(
+                    ev.value_sum if ev.value_sum is not None else (ev.tensor[0] if ev.tensor else 0.0)
+                )
+                continue
+
+            rec = grouped.get(key)
             if rec is None:
-                prompt_id = self._string_id("prompts", ev.prompt)
-                token_id = self._string_id("tokens", ev.token)
-                context_id = self._string_id("contexts", json.dumps(ev.context or {}))
-                run_id_id = self._string_id("run_ids", ev.run_id)
                 rec = {
-                    "hidden_dim": hidden_dim,
-                    "vec": np.zeros(hidden_dim, dtype=np.float32),
-                    "seen": set(),
-                    "count": 0,
+                    "channels": [],
+                    "values": [],
+                    "prompt": ev.prompt,
+                    "token": ev.token,
+                    "context": ev.context,
                     "prompt_index": ev.prompt_index if ev.prompt_index is not None else -1,
                     "token_index": ev.token_index if ev.token_index is not None else -1,
-                    "prompt_id": prompt_id,
-                    "token_id": token_id,
-                    "context_id": context_id,
-                    "run_id_id": run_id_id,
+                    "run_id": ev.run_id,
                 }
-                self._pending[key] = rec
-            if ev.channel >= rec["hidden_dim"]:
-                raise ValueError(
-                    f"channel {ev.channel} exceeds hidden_dim {rec['hidden_dim']}; "
-                    "set LATENTDB_MAX_CHANNELS to the collector max_channels"
-                )
-            if ev.channel not in rec["seen"]:
-                rec["count"] += 1
-                rec["seen"].add(ev.channel)
-            rec["vec"][ev.channel] = float(ev.value_sum if ev.value_sum is not None else (ev.tensor[0] if ev.tensor else 0.0))
+                grouped[key] = rec
+            rec["channels"].append(int(ev.channel))
+            rec["values"].append(
+                float(ev.value_sum if ev.value_sum is not None else (ev.tensor[0] if ev.tensor else 0.0))
+            )
+            if rec["prompt"] is None:
+                rec["prompt"] = ev.prompt
+            if rec["token"] is None:
+                rec["token"] = ev.token
+            if rec["context"] is None:
+                rec["context"] = ev.context
+
+        per_layer: dict[str, list[dict]] = {}
+        for (run_id, step, layer), rec in grouped.items():
+            channels = rec["channels"]
+            values = rec["values"]
+            if len(channels) == hidden_dim:
+                min_ch = min(channels)
+                max_ch = max(channels)
+                full = min_ch == 0 and max_ch == hidden_dim - 1 and len(set(channels)) == hidden_dim
+            else:
+                full = False
+
+            if full:
+                vec = np.zeros(hidden_dim, dtype=np.float32)
+                vec[np.asarray(channels, dtype=np.int32)] = np.asarray(values, dtype=np.float32)
+                row = {
+                    "vec": vec,
+                    "step": int(step),
+                    "prompt_index": int(rec["prompt_index"]),
+                    "token_index": int(rec["token_index"]),
+                    "prompt_id": self._string_id("prompts", rec["prompt"]),
+                    "token_id": self._string_id("tokens", rec["token"]),
+                    "context_id": self._string_id("contexts", json.dumps(rec["context"] or {})),
+                    "run_id_id": self._string_id("run_ids", rec["run_id"]),
+                }
+                per_layer.setdefault(layer, []).append(row)
+                continue
+
+            pending = {
+                "hidden_dim": hidden_dim,
+                "vec": np.zeros(hidden_dim, dtype=np.float32),
+                "seen": set(),
+                "count": 0,
+                "prompt_index": rec["prompt_index"],
+                "token_index": rec["token_index"],
+                "prompt_id": self._string_id("prompts", rec["prompt"]),
+                "token_id": self._string_id("tokens", rec["token"]),
+                "context_id": self._string_id("contexts", json.dumps(rec["context"] or {})),
+                "run_id_id": self._string_id("run_ids", rec["run_id"]),
+            }
+            for ch, val in zip(channels, values):
+                if ch >= hidden_dim:
+                    raise ValueError(
+                        f"channel {ch} exceeds hidden_dim {hidden_dim}; "
+                        "set LATENTDB_MAX_CHANNELS to the collector max_channels"
+                    )
+                if ch not in pending["seen"]:
+                    pending["count"] += 1
+                    pending["seen"].add(ch)
+                pending["vec"][ch] = float(val)
+            self._pending[(run_id, step, layer)] = pending
+
+        for layer, rows in per_layer.items():
+            self._append_rows(layer, rows)
 
         self._flush_pending(force=False)
 
@@ -373,7 +456,8 @@ class HDF5Backend(StorageBackend):
             prompt = prompts[prompt_id[i]] if prompt_id[i] >= 0 else None
             token = tokens[token_id[i]] if token_id[i] >= 0 else None
             run_id = run_ids[run_id_id[i]] if run_id_id[i] >= 0 else ""
-            for ch, val in enumerate(x[i]):
+            row_vals = x[i].tolist()
+            for ch, val in enumerate(row_vals):
                 events.append(
                     ActivationEvent(
                         run_id=run_id,
@@ -449,7 +533,8 @@ class HDF5Backend(StorageBackend):
                 prompt = prompts[prompt_id[i]] if prompt_id[i] >= 0 else None
                 token = tokens[token_id[i]] if token_id[i] >= 0 else None
                 run_id = run_ids[run_id_id[i]] if run_id_id[i] >= 0 else ""
-                for ch, val in enumerate(x[i]):
+                row_vals = x[i].tolist()
+                for ch, val in enumerate(row_vals):
                     events.append(
                         ActivationEvent(
                             run_id=run_id,
