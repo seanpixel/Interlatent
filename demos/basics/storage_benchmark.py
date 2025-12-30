@@ -38,7 +38,7 @@ def build_events(num_steps: int, channels: int, layer: str, run_id: str):
     return events
 
 
-def time_write_read(db_uri: str, events, layer: str, batch_size: int):
+def time_write_read(db_uri: str, events, layer: str, batch_size: int, read_mode: str):
     os.environ["LATENTDB_WRITE_BATCH_SIZE"] = str(batch_size)
     db = LatentDB(db_uri)
 
@@ -48,14 +48,30 @@ def time_write_read(db_uri: str, events, layer: str, batch_size: int):
     db.flush()
     t1 = time.perf_counter()
 
-    rows = db.fetch_activations(layer=layer)
-    t2 = time.perf_counter()
-
-    # Force iter_activations path
+    rows = []
     count_iter = 0
-    for batch in db.iter_activations(layer=layer, batch_size=1000):
-        count_iter += len(batch)
-    t3 = time.perf_counter()
+    t2 = time.perf_counter()
+    if read_mode == "expanded":
+        rows = db.fetch_activations(layer=layer)
+        t2 = time.perf_counter()
+        for batch in db.iter_activations(layer=layer, batch_size=1000):
+            count_iter += len(batch)
+        t3 = time.perf_counter()
+    elif read_mode == "rows":
+        store = db._store
+        if hasattr(store, "_conn"):
+            cur = store._conn.cursor()
+            cur.execute("SELECT tensor FROM activations WHERE layer = ? ORDER BY step", (layer,))
+            tensors = cur.fetchall()
+            _ = [r["tensor"] for r in tensors]
+        elif hasattr(store, "_file"):
+            grp = store._file["activations"].get(layer.replace("/", "_"))
+            size = int(grp.attrs.get("size", 0)) if grp is not None else 0
+            if grp is not None and size > 0:
+                _ = grp["x"][:size]
+        t3 = time.perf_counter()
+    else:
+        raise ValueError("read_mode must be 'expanded' or 'rows'")
 
     db.close()
     return {
@@ -79,6 +95,13 @@ def parse_args():
         "--no-align-batch",
         action="store_true",
         help="Disable batch-size alignment (may split steps across flushes).",
+    )
+    ap.add_argument(
+        "--read-mode",
+        type=str,
+        choices=["expanded", "rows"],
+        default="expanded",
+        help="expanded=ActivationEvent expansion; rows=raw row reads only.",
     )
     ap.add_argument("--keep", action="store_true", help="Keep benchmark DB files.")
     return ap.parse_args()
@@ -110,14 +133,16 @@ def main():
     print(f"[setup] batch_size={batch_size}")
 
     print("\n[sqlite] timing...")
-    sqlite_stats = time_write_read(sqlite_uri, events, args.layer, batch_size)
+    sqlite_stats = time_write_read(sqlite_uri, events, args.layer, batch_size, args.read_mode)
     print(f"write: {sqlite_stats['write_s']:.3f}s | fetch: {sqlite_stats['fetch_s']:.3f}s | iter: {sqlite_stats['iter_s']:.3f}s")
-    print(f"rows(fetch)={sqlite_stats['rows']} rows(iter)={sqlite_stats['rows_iter']}")
+    if args.read_mode == "expanded":
+        print(f"rows(fetch)={sqlite_stats['rows']} rows(iter)={sqlite_stats['rows_iter']}")
 
     print("\n[hdf5] timing...")
-    hdf5_stats = time_write_read(hdf5_uri, events, args.layer, batch_size)
+    hdf5_stats = time_write_read(hdf5_uri, events, args.layer, batch_size, args.read_mode)
     print(f"write: {hdf5_stats['write_s']:.3f}s | fetch: {hdf5_stats['fetch_s']:.3f}s | iter: {hdf5_stats['iter_s']:.3f}s")
-    print(f"rows(fetch)={hdf5_stats['rows']} rows(iter)={hdf5_stats['rows_iter']}")
+    if args.read_mode == "expanded":
+        print(f"rows(fetch)={hdf5_stats['rows']} rows(iter)={hdf5_stats['rows_iter']}")
 
     if not args.keep:
         if args.sqlite.exists():
