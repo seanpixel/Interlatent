@@ -75,7 +75,11 @@ class StorageBackend(abc.ABC):
         downsample: int = 1,
     ) -> Sequence[float]:  # pragma: no cover
         """Return flattened activation values satisfying the filter."""
-        
+
+    @abc.abstractmethod
+    def fetch_activations(self, *, layer: str, limit: int | None = None) -> List[ActivationEvent]:
+        """Return ActivationEvent rows for the given layer."""
+
     @abc.abstractmethod
     def unexplained(self, overwrite: bool) -> Iterable[StatBlock]:  # pragma: no cover
         """Yield StatBlocks needing a (new) explanation."""

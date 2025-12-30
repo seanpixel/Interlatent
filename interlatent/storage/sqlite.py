@@ -85,15 +85,13 @@ class SQLiteBackend(StorageBackend):
               run_id     TEXT,
               step       INTEGER,
               layer      TEXT,
-              channel    INTEGER,
               prompt     TEXT,
               prompt_index INTEGER,
               token_index  INTEGER,
               token      TEXT,
-              tensor     TEXT,          
-              timestamp  TEXT,
-              context    TEXT,      
-              PRIMARY KEY (run_id, step, layer, channel)
+              tensor     TEXT,
+              context    TEXT,
+              PRIMARY KEY (run_id, step, layer)
             ) WITHOUT ROWID;
             """
         )
@@ -208,7 +206,7 @@ class SQLiteBackend(StorageBackend):
         cur = self._conn.cursor()
         metric_rows = []
         stat_rows = []
-        activation_rows = []
+        batches: dict[tuple[str, int, str], dict] = {}
 
         for ev in events:
             metrics: dict[str, float] = ev.context.get("metrics", {})
@@ -229,21 +227,29 @@ class SQLiteBackend(StorageBackend):
                     )
                     stat_rows.append((ev.layer, ev.channel, sum_x, sum_x2))
 
-            activation_rows.append(
-                (
-                    ev.run_id,
-                    ev.step,
-                    ev.layer,
-                    ev.channel,
-                    ev.prompt,
-                    ev.prompt_index,
-                    ev.token_index,
-                    ev.token,
-                    json.dumps(ev.tensor),
-                    ev.timestamp,
-                    json.dumps(ev.context),
-                )
+            key = (ev.run_id, ev.step, ev.layer)
+            batch = batches.setdefault(
+                key,
+                {
+                    "prompt": ev.prompt,
+                    "prompt_index": ev.prompt_index,
+                    "token_index": ev.token_index,
+                    "token": ev.token,
+                    "context": ev.context,
+                    "vec": {},
+                },
             )
+            batch["vec"][ev.channel] = float(ev.value_sum if ev.value_sum is not None else (ev.tensor[0] if ev.tensor else 0.0))
+            if batch["prompt"] is None:
+                batch["prompt"] = ev.prompt
+            if batch["prompt_index"] is None:
+                batch["prompt_index"] = ev.prompt_index
+            if batch["token_index"] is None:
+                batch["token_index"] = ev.token_index
+            if batch["token"] is None:
+                batch["token"] = ev.token
+            if not batch["context"]:
+                batch["context"] = ev.context
 
         if metric_rows:
             cur.executemany(
@@ -271,11 +277,35 @@ class SQLiteBackend(StorageBackend):
                 stat_rows,
             )
 
+        activation_rows = []
+        for (run_id, step, layer), batch in batches.items():
+            vec = batch["vec"]
+            if vec:
+                max_ch = max(vec.keys())
+                tensor = [0.0] * (max_ch + 1)
+                for ch, val in vec.items():
+                    tensor[int(ch)] = float(val)
+            else:
+                tensor = []
+            activation_rows.append(
+                (
+                    run_id,
+                    step,
+                    layer,
+                    batch["prompt"],
+                    batch["prompt_index"],
+                    batch["token_index"],
+                    batch["token"],
+                    json.dumps(tensor),
+                    json.dumps(batch["context"]),
+                )
+            )
+
         cur.executemany(
             """
             INSERT OR REPLACE INTO activations
-            (run_id, step, layer, channel, prompt, prompt_index, token_index, token, tensor, timestamp, context)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (run_id, step, layer, prompt, prompt_index, token_index, token, tensor, context)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             activation_rows,
         )
@@ -287,17 +317,38 @@ class SQLiteBackend(StorageBackend):
             cur = self._conn.cursor()
             rows = cur.execute(
                 """
-                SELECT run_id, step, layer, channel, prompt, prompt_index, token_index, token, tensor, context
+                SELECT run_id, step, layer, prompt, prompt_index, token_index, token, tensor, context
                 FROM activations
                 WHERE layer = ?
-                ORDER BY step, channel
+                ORDER BY step
                 LIMIT ? OFFSET ?
                 """,
                 (layer, batch_size, offset),
             ).fetchall()
             if not rows:
                 break
-            yield rows
+            events: list[ActivationEvent] = []
+            for r in rows:
+                tensor = json.loads(r["tensor"] or "[]")
+                ctx = json.loads(r["context"]) if r["context"] else {}
+                for ch, val in enumerate(tensor):
+                    events.append(
+                        ActivationEvent(
+                            run_id=r["run_id"],
+                            step=r["step"],
+                            layer=r["layer"],
+                            channel=ch,
+                            prompt=r.get("prompt"),
+                            prompt_index=r.get("prompt_index"),
+                            token_index=r.get("token_index"),
+                            token=r.get("token"),
+                            tensor=[float(val)],
+                            context=ctx,
+                            value_sum=float(val),
+                            value_sq_sum=float(val * val),
+                        )
+                    )
+            yield events
             offset += batch_size
 
     def write_statblock(self, sb: StatBlock) -> None:
@@ -378,6 +429,41 @@ class SQLiteBackend(StorageBackend):
     # Read / query -------------------------------------------------------
     # ------------------------------------------------------------------
 
+    def fetch_activations(self, *, layer: str, limit: int | None = None) -> List[ActivationEvent]:
+        cur = self._conn.cursor()
+        sql = (
+            "SELECT run_id, step, layer, prompt, prompt_index, token_index, token, tensor, context "
+            "FROM activations WHERE layer = ? "
+            "ORDER BY step"
+        )
+        params = [layer]
+        if limit:
+            sql += " LIMIT ?"
+            params.append(limit)
+        rows = cur.execute(sql, params).fetchall()
+        events: list[ActivationEvent] = []
+        for r in rows:
+            tensor = json.loads(r["tensor"] or "[]")
+            ctx = json.loads(r["context"]) if r["context"] else {}
+            for ch, val in enumerate(tensor):
+                events.append(
+                    ActivationEvent(
+                        run_id=r["run_id"],
+                        step=r["step"],
+                        layer=r["layer"],
+                        channel=ch,
+                        prompt=r.get("prompt"),
+                        prompt_index=r.get("prompt_index"),
+                        token_index=r.get("token_index"),
+                        token=r.get("token"),
+                        tensor=[float(val)],
+                        context=ctx,
+                        value_sum=float(val),
+                        value_sq_sum=float(val * val),
+                    )
+                )
+        return events
+
     def fetch_events(
         self,
         layer: str,
@@ -387,8 +473,8 @@ class SQLiteBackend(StorageBackend):
         downsample: int = 1,
     ) -> Sequence[float]:
         cur = self._conn.cursor()
-        sql = ["SELECT tensor FROM activations WHERE layer=? AND channel=?"]
-        params: list = [layer, channel]
+        sql = ["SELECT tensor FROM activations WHERE layer=?"]
+        params: list = [layer]
         if t0 is not None:
             sql.append("AND step >= ?")
             params.append(int(t0))
@@ -405,7 +491,9 @@ class SQLiteBackend(StorageBackend):
         # flatten JSON arrays
         out: list[float] = []
         for r in selected:
-            out.extend(json.loads(r["tensor"]))
+            vals = json.loads(r["tensor"] or "[]")
+            if channel < len(vals):
+                out.append(float(vals[channel]))
         return out
 
 
@@ -448,12 +536,8 @@ class SQLiteBackend(StorageBackend):
             query += " WHERE channel = ?"
             params.append(channel)
 
-        print(query, params)
         cur.execute(query, params)
-
         for row in cur.fetchall():
-            print("row:", row)
-            print(row["count"])
             yield StatBlock(
                 layer=row["layer"],
                 channel=row["channel"],
@@ -465,6 +549,11 @@ class SQLiteBackend(StorageBackend):
                 top_correlations=json.loads(row["correlations"] or "[]"),
                 last_updated=row["last_updated"],
             )
+
+    def list_layers(self) -> list[str]:
+        cur = self._conn.cursor()
+        rows = cur.execute("SELECT DISTINCT layer FROM activations").fetchall()
+        return [row["layer"] for row in rows]
 
     # ------------------------------------------------------------------
     # Stats computation --------------------------------------------------
@@ -479,51 +568,47 @@ class SQLiteBackend(StorageBackend):
             Skip channels with fewer than this many samples.
         """
         cur = self._conn.cursor()
-
-        # Pull every (layer, channel) with at least min_count rows
         cur.execute(
             """
-            SELECT layer, channel, COUNT(*)
+            SELECT layer, tensor
             FROM activations
-            GROUP BY layer, channel
-            HAVING COUNT(*) >= ?
-            """,
-            (min_count,),
+            """
         )
-        targets = cur.fetchall()
+        rows = cur.fetchall()
 
-        print("targets:", targets)
+        aggregates: dict[tuple[str, int], dict] = {}
+        for r in rows:
+            layer = r["layer"]
+            vals = json.loads(r["tensor"] or "[]")
+            for ch, val in enumerate(vals):
+                key = (layer, ch)
+                agg = aggregates.setdefault(
+                    key,
+                    {"count": 0, "sum_x": 0.0, "sum_x2": 0.0, "min": float("inf"), "max": float("-inf")},
+                )
+                v = float(val)
+                agg["count"] += 1
+                agg["sum_x"] += v
+                agg["sum_x2"] += v * v
+                agg["min"] = min(agg["min"], v)
+                agg["max"] = max(agg["max"], v)
 
-        for row in targets:
-            layer   = row["layer"]
-            channel = row["channel"]
-            count   = row["COUNT(*)"]
-
-            # Fetch tensors for this (layer, channel)
-            cur.execute(
-                """
-                SELECT tensor
-                FROM activations
-                WHERE layer = ? AND channel = ?
-                """,
-                (layer, channel),
+        for (layer, channel), agg in aggregates.items():
+            if agg["count"] < min_count:
+                continue
+            mean = agg["sum_x"] / agg["count"]
+            var = agg["sum_x2"] / agg["count"] - mean * mean
+            std = var ** 0.5 if var > 0 else 0.0
+            sb = StatBlock(
+                layer=layer,
+                channel=channel,
+                count=agg["count"],
+                mean=mean,
+                std=std,
+                min=agg["min"],
+                max=agg["max"],
+                top_correlations=[],
             )
-
-            tensors = cur.fetchall()
-
-            flat: list[float] = []
-            for tensor_dict in tensors:
-                data = json.loads(tensor_dict["tensor"])
-                flat.extend(data)
-
-            if not flat:
-                continue  # nothing numeric, skip
-
-            sb = StatBlock.from_array(layer, channel, flat)
-            print(sb)
-            sum_x  = float(sum(flat))
-            sum_x2 = float(sum(v * v for v in flat))
-
             cur.execute(
                 """
                 INSERT INTO stats (layer, channel, count, mean, std, min, max,
@@ -540,7 +625,7 @@ class SQLiteBackend(StorageBackend):
                 """,
                 (
                     sb.layer, sb.channel, sb.count, sb.mean, sb.std,
-                    sb.min, sb.max, sum_x, sum_x2, json.dumps([]), sb.last_updated
+                    sb.min, sb.max, agg["sum_x"], agg["sum_x2"], json.dumps([]), sb.last_updated
                 ),
             )
 
@@ -549,41 +634,29 @@ class SQLiteBackend(StorageBackend):
 
         for row in cur.execute("SELECT * FROM stats WHERE count >= ?", (min_count,)):
             layer, ch, N = row["layer"], row["channel"], row["count"]
-
-            print(row)
-
-            mu_x  = row["sum_x"] / N
+            mu_x = row["sum_x"] / N
             var_x = row["sum_x2"] / N - mu_x**2
             sigma_x = var_x ** 0.5 if var_x > 1e-12 else 0.0
 
-            print("stats", mu_x, var_x, sigma_x)
-
             corrs = []
-
-            # New cursor to avoid duplication
             cur2 = self._conn.cursor()
-
             for metric in all_metrics:
-                print(metric)
                 ms = cur2.execute(
                     "SELECT count, sum_m, sum_m2, sum_xm FROM metric_sums "
                     "WHERE metric=? AND layer=? AND channel=?",
                     (metric, layer, ch)
                 ).fetchone()
-                
                 if not ms or ms["count"] < min_count or sigma_x == 0:
                     continue
 
-                mu_m  = ms["sum_m"] / ms["count"]
+                mu_m = ms["sum_m"] / ms["count"]
                 var_m = ms["sum_m2"] / ms["count"] - mu_m**2
                 sigma_m = var_m ** 0.5
                 if sigma_m < 1e-12:
                     continue
 
                 rho = (ms["sum_xm"] / ms["count"] - mu_x * mu_m) / (sigma_x * sigma_m)
-                print("rho", rho)
                 corrs.append((metric, float(rho)))
-               
 
             corrs.sort(key=lambda p: abs(p[1]), reverse=True)
             cur2.execute(

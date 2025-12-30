@@ -8,21 +8,19 @@ Examples:
 from __future__ import annotations
 
 import argparse
-import json
-import os
-import sqlite3
 from typing import Sequence, Tuple
 
+from interlatent.api import LatentDB
 
-def _open_db(uri: str) -> sqlite3.Connection:
-    if uri.startswith("sqlite:///"):
-        path = uri[len("sqlite:///") :]
-    else:
-        path = uri
-    if not os.path.exists(path):
-        raise SystemExit(f"Database not found: {path}")
-    conn = sqlite3.connect(path)
-    return conn
+def _iter_layers(db: LatentDB, *, layer: str | None, layer_prefix: str | None) -> list[str]:
+    if layer:
+        return [layer]
+    if layer_prefix:
+        if hasattr(db._store, "list_layers"):
+            layers = db._store.list_layers()
+            return [l for l in layers if l.startswith(layer_prefix)]
+        raise SystemExit("layer_prefix provided but backend does not support list_layers().")
+    raise SystemExit("Must provide --layer or --layer-prefix.")
 
 
 def _format_table(headers: Sequence[str], rows: Sequence[Sequence], max_width: int = 24) -> str:
@@ -49,7 +47,7 @@ def _format_table(headers: Sequence[str], rows: Sequence[Sequence], max_width: i
 
 
 def search(
-    conn: sqlite3.Connection,
+    db: LatentDB,
     *,
     layer: str | None = None,
     layer_prefix: str | None = None,
@@ -59,51 +57,30 @@ def search(
     top: int = 50,
     min_abs: float | None = None,
 ) -> str:
-    sql = [
-        "SELECT run_id, layer, channel, prompt_index, token_index, token, prompt, tensor, step",
-        "FROM activations",
-        "WHERE 1=1",
-    ]
-    params: list = []
-
-    if layer:
-        sql.append("AND layer = ?")
-        params.append(layer)
-    if layer_prefix:
-        sql.append("AND layer LIKE ?")
-        params.append(f"{layer_prefix}%")
-    if prompt_like:
-        sql.append("AND prompt LIKE ?")
-        params.append(f"%{prompt_like}%")
-    if token_like:
-        sql.append("AND token LIKE ?")
-        params.append(f"%{token_like}%")
-    if channel is not None:
-        sql.append("AND channel = ?")
-        params.append(channel)
-
-    sql.append("ORDER BY step")
-
-    cur = conn.cursor()
-    cur.execute(" ".join(sql), params)
-
     rows = []
-    for r in cur.fetchall():
-        tensor = json.loads(r[7] or "[]")
-        val = tensor[0] if tensor else 0.0
+    for layer_name in _iter_layers(db, layer=layer, layer_prefix=layer_prefix):
+        events = db.fetch_activations(layer=layer_name, limit=None)
+        for ev in events:
+            if channel is not None and ev.channel != channel:
+                continue
+            if prompt_like and (ev.prompt is None or prompt_like not in ev.prompt):
+                continue
+            if token_like and (ev.token is None or token_like not in ev.token):
+                continue
+            val = ev.value_sum if ev.value_sum is not None else (ev.tensor[0] if ev.tensor else 0.0)
         if min_abs is not None and abs(val) < min_abs:
             continue
         rows.append(
             [
-                r[0],  # run_id
-                r[1],  # layer
-                r[2],  # channel
-                r[3],  # prompt_idx
-                r[4],  # token_idx
-                r[5],  # token
+                ev.run_id,  # run_id
+                ev.layer,  # layer
+                ev.channel,  # channel
+                ev.prompt_index,  # prompt_idx
+                ev.token_index,  # token_idx
+                ev.token,  # token
                 f"{val:.4f}",
                 f"{abs(val):.4f}",
-                r[6],  # prompt text
+                ev.prompt,  # prompt text
             ]
         )
 
@@ -127,9 +104,9 @@ def main():
     p.add_argument("--min-abs", type=float, help="Only show activations with |value| >= threshold")
     args = p.parse_args()
 
-    conn = _open_db(args.db)
+    db = LatentDB(args.db)
     table = search(
-        conn,
+        db,
         layer=args.layer,
         layer_prefix=args.layer_prefix,
         prompt_like=args.prompt_like,

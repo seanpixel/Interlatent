@@ -24,7 +24,7 @@ import torch
 import torch.distributed as dist
 
 from interlatent.analysis.intervention.api import _resolve_layer_module
-from interlatent.analysis.vis.diff import _open_db, latent_diff
+from interlatent.analysis.vis.diff import latent_diff
 from interlatent.api import LatentDB
 from interlatent.collectors.llm_collector import LLMCollector
 from interlatent.schema import ActivationEvent
@@ -500,18 +500,18 @@ def main():
         try:
             token_like_a = token_like_from_prompt(tok, args.prompt_a, args.target_a)
             token_like_b = token_like_from_prompt(tok, args.prompt_b, args.target_b)
-            conn = _open_db(args.latent_db)
+            db = LatentDB(args.latent_db)
             table_full = latent_diff(
-                conn,
-                conn,
+                db,
+                db,
                 layer=args.latent_layer,
                 prompt_like_a=args.prompt_a,
                 prompt_like_b=args.prompt_b,
                 top=args.topk_diff,
             )
             table_tokens = latent_diff(
-                conn,
-                conn,
+                db,
+                db,
                 layer=args.latent_layer,
                 prompt_like_a=args.prompt_a,
                 prompt_like_b=args.prompt_b,

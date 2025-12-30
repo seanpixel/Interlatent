@@ -1,8 +1,5 @@
 """
-Plot activation traces for a given (layer, channel, prompt) from a LatentDB SQLite file.
-
-This is a lightweight, pyplot-based visualizer geared toward quick interpretability
-passes on small runs. It reads directly from the `activations` table.
+Plot activation traces for a given (layer, channel, prompt) from a LatentDB file.
 
 Usage (CLI):
   python -m interlatent.analysis.vis.plot latents_llm.db --layer llm.layer.-1 --channel 0 --prompt-index 0 --output out.png
@@ -14,15 +11,13 @@ Programmatic:
 from __future__ import annotations
 
 import argparse
-import json
-import os
-import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List, Optional
 
 import matplotlib.pyplot as plt
 
+from interlatent.api import LatentDB
 
 @dataclass
 class ActivationRow:
@@ -32,18 +27,6 @@ class ActivationRow:
     prompt_index: int | None
     prompt: str | None
     run_id: str | None = None
-
-
-def _open_db(uri: str) -> sqlite3.Connection:
-    # Accept sqlite:///path or bare path.
-    if uri.startswith("sqlite:///"):
-        path = uri[len("sqlite:///") :]
-    else:
-        path = uri
-    if not os.path.exists(path):
-        raise FileNotFoundError(f"Database not found: {path}")
-    conn = sqlite3.connect(path)
-    return conn
 
 
 def _pretty_token(tok: str | None) -> str:
@@ -70,48 +53,36 @@ def fetch_activations(
     else selects prompts matching prompt_like (LIKE '%...%'). Results ordered by
     (prompt_index, token_index).
     """
-    conn = _open_db(db)
-    cur = conn.cursor()
-
-    sql = [
-        "SELECT run_id, prompt_index, prompt, token_index, token, tensor",
-        "FROM activations",
-        "WHERE layer=? AND channel=?",
-    ]
-    params: list = [layer, channel]
-
-    if prompt_index is not None:
-        sql.append("AND prompt_index = ?")
-        params.append(prompt_index)
-    if prompt_like:
-        sql.append("AND prompt LIKE ?")
-        params.append(f"%{prompt_like}%")
-
-    sql.append("ORDER BY prompt_index, token_index, step")
-    if limit_prompts is not None:
-        # limit prompts by grouping prompt_index; simple approach via subquery.
-        sql = [
-            "SELECT run_id, prompt_index, prompt, token_index, token, tensor FROM (",
-            *sql,
-            ") WHERE prompt_index IN (SELECT DISTINCT prompt_index FROM activations WHERE layer=? AND channel=? LIMIT ?)",
-        ]
-        params.extend([layer, channel, limit_prompts])
-
-    cur.execute(" ".join(sql), params)
+    dbi = LatentDB(db)
+    events = dbi.fetch_activations(layer=layer)
     rows = []
-    for run_id, p_idx, prompt, t_idx, token, tensor_json in cur.fetchall():
-        tensor = json.loads(tensor_json) if tensor_json else []
-        val = tensor[0] if tensor else 0.0
+    for ev in events:
+        if ev.channel != channel:
+            continue
+        if prompt_index is not None and ev.prompt_index != prompt_index:
+            continue
+        if prompt_like and (ev.prompt is None or prompt_like not in ev.prompt):
+            continue
         rows.append(
             ActivationRow(
-                token_index=t_idx if t_idx is not None else 0,
-                token=token,
-                value=float(val),
-                prompt_index=p_idx,
-                prompt=prompt,
-                run_id=run_id,
+                token_index=ev.token_index if ev.token_index is not None else 0,
+                token=ev.token,
+                value=float(ev.value_sum if ev.value_sum is not None else (ev.tensor[0] if ev.tensor else 0.0)),
+                prompt_index=ev.prompt_index,
+                prompt=ev.prompt,
+                run_id=ev.run_id,
             )
         )
+
+    if limit_prompts is not None:
+        seen = []
+        for row in rows:
+            if row.prompt_index not in seen:
+                seen.append(row.prompt_index)
+            if len(seen) >= limit_prompts:
+                break
+        rows = [r for r in rows if r.prompt_index in set(seen)]
+    rows.sort(key=lambda r: (r.prompt_index or 0, r.token_index))
     return rows
 
 

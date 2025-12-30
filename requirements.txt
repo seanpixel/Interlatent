@@ -4,6 +4,7 @@ stable_baselines3==2.7.0
 matplotlib==3.6.0
 pydantic==2.12.5
 pytest==7.1.1
+h5py==3.11.0
 
 datasets==4.4.1
 git+https://github.com/huggingface/transformers
@@ -16,4 +17,3 @@ mistral-common==1.8.6
 mistral-common[opencv]
 
 -e .
-

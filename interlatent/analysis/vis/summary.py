@@ -1,30 +1,26 @@
 """
-Lightweight CLI utilities to inspect an Interlatent SQLite database without
+Lightweight CLI utilities to inspect an Interlatent database without
 pulling data into pandas. Designed for quick terminal summaries.
 
 Usage:
   python -m interlatent.analysis.vis.summary sqlite:///latents_llm_local.db
-  python -m interlatent.analysis.vis.summary latents.db --limit 5
+  python -m interlatent.analysis.vis.summary hdf5:///latents_llm_local.h5 --limit 5
 """
 from __future__ import annotations
 
 import argparse
 import json
-import os
-import sqlite3
 from typing import List, Sequence, Tuple, Optional
 
+from interlatent.api import LatentDB
 
-def _open_db(uri: str) -> sqlite3.Connection:
-    # Accept sqlite:///path or bare path.
-    if uri.startswith("sqlite:///"):
-        path = uri[len("sqlite:///") :]
-    else:
-        path = uri
-    if not os.path.exists(path):
-        raise SystemExit(f"Database not found: {path}")
-    conn = sqlite3.connect(path)
-    return conn
+def _list_layers(db: LatentDB, prefix: str | None = None) -> list[str]:
+    if hasattr(db._store, "list_layers"):
+        layers = db._store.list_layers()
+        if prefix:
+            layers = [l for l in layers if l.startswith(prefix)]
+        return layers
+    raise SystemExit("Backend does not support listing layers.")
 
 
 def _format_table(headers: Sequence[str], rows: Sequence[Sequence], max_width: int = 24) -> str:
@@ -62,116 +58,87 @@ def _ascii_bars(items: Sequence[Tuple[str, int]], width: int = 40) -> str:
     return "\n".join(lines)
 
 
-def summary(conn: sqlite3.Connection) -> str:
-    cur = conn.cursor()
-    cur.execute("SELECT COUNT(*) FROM activations")
-    total = cur.fetchone()[0]
-
-    cur.execute("SELECT COUNT(DISTINCT run_id) FROM activations")
-    runs = cur.fetchone()[0]
-
-    cur.execute("SELECT COUNT(DISTINCT layer) FROM activations")
-    layers = cur.fetchone()[0]
-
-    cur.execute("SELECT COUNT(DISTINCT channel) FROM activations")
-    channels = cur.fetchone()[0]
+def summary(db: LatentDB) -> str:
+    layers = _list_layers(db)
+    total = 0
+    runs = set()
+    channels = set()
+    for layer in layers:
+        events = db.fetch_activations(layer=layer)
+        total += len(events)
+        for ev in events:
+            runs.add(ev.run_id)
+            channels.add((layer, ev.channel))
+    layer_count = len(layers)
+    channel_count = len(channels)
 
     return (
         f"Total activations: {total}\n"
-        f"Runs: {runs} | Layers: {layers} | Channels: {channels}"
+        f"Runs: {len(runs)} | Layers: {layer_count} | Channels: {channel_count}"
     )
 
 
-def layer_histogram(conn: sqlite3.Connection, top: int = 10) -> str:
-    cur = conn.cursor()
-    cur.execute(
-        """
-        SELECT layer, COUNT(*) as c
-        FROM activations
-        GROUP BY layer
-        ORDER BY c DESC
-        LIMIT ?
-        """,
-        (top,),
-    )
-    rows = cur.fetchall()
-    return _ascii_bars([(r[0], r[1]) for r in rows])
+def layer_histogram(db: LatentDB, top: int = 10) -> str:
+    counts = []
+    for layer in _list_layers(db):
+        counts.append((layer, len(db.fetch_activations(layer=layer))))
+    counts.sort(key=lambda x: x[1], reverse=True)
+    return _ascii_bars(counts[:top])
 
 
-def head(conn: sqlite3.Connection, limit: int = 5) -> str:
-    cur = conn.cursor()
-    cur.execute(
-        """
-        SELECT run_id, step, layer, channel, prompt_index, token_index, token, tensor, timestamp
-        FROM activations
-        ORDER BY timestamp, step
-        LIMIT ?
-        """,
-        (limit,),
-    )
+def head(db: LatentDB, limit: int = 5) -> str:
     rows = []
-    for r in cur.fetchall():
-        tensor = json.loads(r[7]) if r[7] else []
-        val = tensor[0] if tensor else None
-        rows.append(
-            [
-                r[0],
-                r[1],
-                r[2],
-                r[3],
-                r[4],
-                r[5],
-                r[6],
-                val,
-                r[8],
-            ]
-        )
+    for layer in _list_layers(db):
+        for batch in db.iter_activations(layer=layer, batch_size=limit):
+            for ev in batch:
+                rows.append(
+                    [
+                        ev.run_id,
+                        ev.step,
+                        ev.layer,
+                        ev.channel,
+                        ev.prompt_index,
+                        ev.token_index,
+                        ev.token,
+                        ev.value_sum if ev.value_sum is not None else (ev.tensor[0] if ev.tensor else None),
+                    ]
+                )
+                if len(rows) >= limit:
+                    break
+            if len(rows) >= limit:
+                break
+        if len(rows) >= limit:
+            break
 
-    headers = ["run_id", "step", "layer", "ch", "p_idx", "t_idx", "token", "value", "timestamp"]
+    headers = ["run_id", "step", "layer", "ch", "p_idx", "t_idx", "token", "value"]
     return _format_table(headers, rows)
 
 
-def list_layers(conn: sqlite3.Connection, prefix: str | None = None, top: int = 50) -> str:
-    cur = conn.cursor()
-    sql = "SELECT layer, COUNT(*) as c FROM activations"
-    params: list = []
-    if prefix:
-        sql += " WHERE layer LIKE ?"
-        params.append(f"{prefix}%")
-    sql += " GROUP BY layer ORDER BY c DESC LIMIT ?"
-    params.append(top)
-    cur.execute(sql, params)
-    rows = cur.fetchall()
-    headers = ["layer", "rows"]
-    return _format_table(headers, rows, max_width=64)
-
-
-def layer_stats(conn: sqlite3.Connection, layer: str) -> str:
-    cur = conn.cursor()
-    cur.execute(
-        """
-        SELECT layer, channel, count, mean, std, min, max, correlations, last_updated
-        FROM stats
-        WHERE layer = ?
-        ORDER BY channel
-        """,
-        (layer,),
-    )
+def list_layers(db: LatentDB, prefix: str | None = None, top: int = 50) -> str:
     rows = []
-    for r in cur.fetchall():
-        corrs = json.loads(r[7] or "[]")
+    for layer in _list_layers(db, prefix=prefix):
+        rows.append((layer, len(db.fetch_activations(layer=layer))))
+    rows.sort(key=lambda r: r[1], reverse=True)
+    headers = ["layer", "rows"]
+    return _format_table(headers, rows[:top], max_width=64)
+
+
+def layer_stats(db: LatentDB, layer: str) -> str:
+    rows = []
+    for sb in db.iter_statblocks(layer=layer):
+        corrs = sb.top_correlations or []
         top = ", ".join(f"{m}:{rho:+.2f}" for m, rho in corrs[:3]) if corrs else ""
         rows.append(
             [
-                r[0],
-                r[1],
-                r[2],
-                f"{r[3]:.3f}",
-                f"{r[4]:.3f}",
-                f"{r[5]:.3f}",
-                f"{r[6]:.3f}",
+                sb.layer,
+                sb.channel,
+                sb.count,
+                f"{sb.mean:.3f}",
+                f"{sb.std:.3f}",
+                f"{sb.min:.3f}",
+                f"{sb.max:.3f}",
                 top,
-                r[8],
+                sb.last_updated,
             ]
         )
     headers = ["layer", "ch", "count", "mean", "std", "min", "max", "top_corr", "updated"]
@@ -179,8 +146,8 @@ def layer_stats(conn: sqlite3.Connection, layer: str) -> str:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Quick, dependency-free summaries of an Interlatent SQLite DB.")
-    parser.add_argument("db", help="Path or sqlite:/// URI for the DB.")
+    parser = argparse.ArgumentParser(description="Quick, dependency-free summaries of an Interlatent DB.")
+    parser.add_argument("db", help="Path or sqlite:/// / hdf5:/// URI for the DB.")
     parser.add_argument("--limit", type=int, default=5, help="Rows to show in the head table.")
     parser.add_argument("--top", type=int, default=10, help="Number of layers to include in the histogram.")
     parser.add_argument("--list-layers", action="store_true", help="List layers and row counts instead of histogram.")
@@ -188,23 +155,23 @@ def main():
     parser.add_argument("--layer-stats", help="Show stats/correlations for a specific layer (e.g., latent:llm.layer.20).")
     args = parser.parse_args()
 
-    conn = _open_db(args.db)
+    db = LatentDB(args.db)
 
     print("== Summary ==")
-    print(summary(conn))
+    print(summary(db))
     if args.list_layers:
         print("\n== Layers ==")
-        print(list_layers(conn, prefix=args.layer_prefix, top=args.top))
+        print(list_layers(db, prefix=args.layer_prefix, top=args.top))
     else:
         print("\n== Layer histogram (top {0}) ==".format(args.top))
-        print(layer_histogram(conn, top=args.top))
+        print(layer_histogram(db, top=args.top))
 
     if args.layer_stats:
         print(f"\n== Stats for layer '{args.layer_stats}' ==")
-        print(layer_stats(conn, args.layer_stats))
+        print(layer_stats(db, args.layer_stats))
 
     print(f"\n== Head (first {args.limit} rows) ==")
-    print(head(conn, limit=args.limit))
+    print(head(db, limit=args.limit))
 
 
 if __name__ == "__main__":

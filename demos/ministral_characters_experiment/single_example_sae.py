@@ -388,7 +388,7 @@ def main():
     prompts: List[str] = []
     prompts_by_label: Dict[int, str] = {}
     for label, character in CHARACTERS.items():
-        rewritten = rewrite_prompt(base, character, use_api=not args.no_api) + "\ngive me a hard decision in one line."
+        rewritten = rewrite_prompt(base, character, use_api=not args.no_api) + "\nWhat should I do? Give me a hard decision in one line."
         rewritten = rewritten.strip()
         prompts.append(rewritten)
         prompts_by_label[label] = rewritten

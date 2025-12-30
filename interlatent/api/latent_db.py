@@ -45,6 +45,8 @@ _SCHEME_TO_BACKEND = {
     "sqlite": "..storage.sqlite:SQLiteBackend",
     "file": "..storage.sqlite:SQLiteBackend",  # alias
     "dynamodb": "..storage.dynamo:DynamoBackend",
+    "hdf5": "..storage.hdf5:HDF5Backend",
+    "h5": "..storage.hdf5:HDF5Backend",
 }
 
 
@@ -191,43 +193,9 @@ class LatentDB:
         """
         Return ActivationEvent rows for *all channels* of the given layer,
         ordered by (step, channel).  Used by training datasets.
-
-        Parameters
-        ----------
-        layer : str
-            Layer name to pull.
-        limit : int | None
-            Optional hard cap on number of samples (per channel) for quick
-            experiments.
         """
         t0 = time.perf_counter()
-        cur = self._store._conn.cursor()          # safe: read-only
-        sql = (
-            "SELECT run_id, step, layer, channel, prompt, prompt_index, token_index, token, tensor, context "
-            "FROM activations WHERE layer = ? "
-            "ORDER BY step, channel"
-        )
-        params = [layer]
-        if limit:
-            sql += " LIMIT ?"
-            params.append(limit)
-
-        rows = cur.execute(sql, params).fetchall()
-        rows = [
-            ActivationEvent(
-                run_id=r["run_id"],
-                step=r["step"],
-                layer=r["layer"],
-                channel=r["channel"],
-                prompt=r.get("prompt"),
-                prompt_index=r.get("prompt_index"),
-                token_index=r.get("token_index"),
-                token=r.get("token"),
-                tensor=json.loads(r["tensor"]),
-                context=json.loads(r["context"]) if r["context"] else {},
-            )
-            for r in rows
-        ]
+        rows = self._store.fetch_activations(layer=layer, limit=limit)
         if self._write_log_interval:
             t1 = time.perf_counter()
             _LOG.info("[latents] fetch_activations layer=%s rows=%d time=%.2fms", layer, len(rows), (t1 - t0) * 1e3)
@@ -237,22 +205,7 @@ class LatentDB:
         """Yield activation batches for a layer (paged to reduce memory)."""
         t0 = time.perf_counter()
         total = 0
-        for chunk in self._store.iter_activations(layer, batch_size):  # type: ignore[attr-defined]
-            events = [
-                ActivationEvent(
-                    run_id=r["run_id"],
-                    step=r["step"],
-                    layer=r["layer"],
-                    channel=r["channel"],
-                    prompt=r.get("prompt"),
-                    prompt_index=r.get("prompt_index"),
-                    token_index=r.get("token_index"),
-                    token=r.get("token"),
-                    tensor=json.loads(r["tensor"]),
-                    context=json.loads(r["context"]) if r["context"] else {},
-                )
-                for r in chunk
-            ]
+        for events in self._store.iter_activations(layer, batch_size):  # type: ignore[attr-defined]
             total += len(events)
             if self._write_log_interval:
                 _LOG.info("[latents] iter_activations batch=%d total=%d layer=%s", len(events), total, layer)

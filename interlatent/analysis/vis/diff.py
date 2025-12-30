@@ -8,21 +8,9 @@ Examples:
 from __future__ import annotations
 
 import argparse
-import json
-import os
-import sqlite3
 from typing import Dict, Iterable, Sequence, Tuple
 
-
-def _open_db(uri: str) -> sqlite3.Connection:
-    """Open a SQLite DB from a bare path or sqlite:/// URI."""
-    if uri.startswith("sqlite:///"):
-        path = uri[len("sqlite:///") :]
-    else:
-        path = uri
-    if not os.path.exists(path):
-        raise SystemExit(f"Database not found: {path}")
-    return sqlite3.connect(path)
+from interlatent.api import LatentDB
 
 
 def _format_table(headers: Sequence[str], rows: Sequence[Sequence], max_width: int = 24) -> str:
@@ -48,8 +36,19 @@ def _format_table(headers: Sequence[str], rows: Sequence[Sequence], max_width: i
     return "\n".join(lines)
 
 
+def _iter_layers(db: LatentDB, *, layer: str | None, layer_prefix: str | None) -> list[str]:
+    if layer:
+        return [layer]
+    if layer_prefix:
+        if hasattr(db._store, "list_layers"):
+            layers = db._store.list_layers()
+            return [l for l in layers if l.startswith(layer_prefix)]
+        raise SystemExit("layer_prefix provided but backend does not support list_layers().")
+    raise SystemExit("Must provide --layer or --layer-prefix.")
+
+
 def _aggregated_means(
-    conn: sqlite3.Connection,
+    db: LatentDB,
     *,
     layer: str | None = None,
     layer_prefix: str | None = None,
@@ -60,40 +59,22 @@ def _aggregated_means(
     """
     Return { (layer, channel): (mean, count) } for rows matching the filters.
     """
-    sql = ["SELECT layer, channel, tensor FROM activations WHERE 1=1"]
-    params: list = []
-
-    if layer:
-        sql.append("AND layer = ?")
-        params.append(layer)
-    if layer_prefix:
-        sql.append("AND layer LIKE ?")
-        params.append(f"{layer_prefix}%")
-    if channels:
-        placeholders = ",".join("?" for _ in channels)
-        sql.append(f"AND channel IN ({placeholders})")
-        params.extend(int(ch) for ch in channels)
-    if prompt_like:
-        sql.append("AND prompt LIKE ?")
-        params.append(f"%{prompt_like}%")
-    if token_like:
-        sql.append("AND token LIKE ?")
-        params.append(f"%{token_like}%")
-
-    cur = conn.cursor()
-    cur.execute(" ".join(sql), params)
-
     agg: Dict[Tuple[str, int], Tuple[float, int]] = {}
     sums: Dict[Tuple[str, int], float] = {}
     counts: Dict[Tuple[str, int], int] = {}
-    for layer_name, ch, tensor_json in cur.fetchall():
-        vals = json.loads(tensor_json or "[]")
-        if not vals:
-            continue
-        val = float(vals[0])
-        key = (layer_name, int(ch))
-        sums[key] = sums.get(key, 0.0) + val
-        counts[key] = counts.get(key, 0) + 1
+    for layer_name in _iter_layers(db, layer=layer, layer_prefix=layer_prefix):
+        events = db.fetch_activations(layer=layer_name, limit=None)
+        for ev in events:
+            if channels and ev.channel not in channels:
+                continue
+            if prompt_like and (ev.prompt is None or prompt_like not in ev.prompt):
+                continue
+            if token_like and (ev.token is None or token_like not in ev.token):
+                continue
+            val = ev.value_sum if ev.value_sum is not None else (ev.tensor[0] if ev.tensor else 0.0)
+            key = (layer_name, int(ev.channel))
+            sums[key] = sums.get(key, 0.0) + float(val)
+            counts[key] = counts.get(key, 0) + 1
 
     for key, total in sums.items():
         cnt = counts[key]
@@ -102,8 +83,8 @@ def _aggregated_means(
 
 
 def latent_diff(
-    conn_a: sqlite3.Connection,
-    conn_b: sqlite3.Connection,
+    db_a: LatentDB,
+    db_b: LatentDB,
     *,
     layer: str | None = None,
     layer_prefix: str | None = None,
@@ -118,7 +99,7 @@ def latent_diff(
     Compute per-latent mean activation deltas between two slices (A vs B).
     """
     agg_a = _aggregated_means(
-        conn_a,
+        db_a,
         layer=layer,
         layer_prefix=layer_prefix,
         channels=channels,
@@ -126,7 +107,7 @@ def latent_diff(
         token_like=token_like_a,
     )
     agg_b = _aggregated_means(
-        conn_b,
+        db_b,
         layer=layer,
         layer_prefix=layer_prefix,
         channels=channels,
@@ -175,12 +156,12 @@ def main():
     p.add_argument("--top", type=int, default=20, help="Rows to display sorted by |B-A|.")
     args = p.parse_args()
 
-    conn_a = _open_db(args.db_a)
-    conn_b = _open_db(args.db_b) if args.db_b else conn_a
+    db_a = LatentDB(args.db_a)
+    db_b = LatentDB(args.db_b) if args.db_b else db_a
 
     table = latent_diff(
-        conn_a,
-        conn_b,
+        db_a,
+        db_b,
         layer=args.layer,
         layer_prefix=args.layer_prefix,
         channels=args.channels,
