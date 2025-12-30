@@ -118,8 +118,14 @@ def run(args):
             getattr(config, "hidden_size", 0)
             or getattr(config, "d_model", 0)
             or getattr(config, "n_embd", 0)
+            or getattr(config, "dim", 0)
+            or getattr(config, "model_dim", 0)
             or 0
         )
+        if hidden_size <= 0 and hasattr(llm, "get_input_embeddings"):
+            emb = llm.get_input_embeddings()
+            if emb is not None and hasattr(emb, "weight"):
+                hidden_size = int(getattr(emb.weight, "shape", [0, 0])[1] or 0)
         if hidden_size <= 0:
             raise ValueError("Model config missing hidden_size; set --max_channels manually.")
         args.max_channels = hidden_size
