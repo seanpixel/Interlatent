@@ -16,6 +16,26 @@ class ActivationPairDataset(Dataset):
     def __init__(self, db: LatentDB, layer: str, *, limit: int | None = None):
         pre_tag, post_tag = f"{layer}:pre", f"{layer}:post"
 
+        x_pre, meta_pre = db.fetch_vectors(layer=pre_tag, limit=limit)
+        x_post, meta_post = db.fetch_vectors(layer=post_tag, limit=limit)
+        if x_pre.size and x_post.size:
+            run_ids_pre = meta_pre.get("run_id") or []
+            run_ids_post = meta_post.get("run_id") or []
+            run_id = run_ids_pre[0] if run_ids_pre else None
+            if run_id is not None:
+                mask_pre = [i for i, rid in enumerate(run_ids_pre) if rid == run_id]
+                mask_post = [i for i, rid in enumerate(run_ids_post) if rid == run_id]
+                x_pre = x_pre[mask_pre] if mask_pre else x_pre
+                x_post = x_post[mask_post] if mask_post else x_post
+            n = min(x_pre.shape[0], x_post.shape[0])
+            self.samples = list(zip(
+                [torch.tensor(x_pre[i], dtype=torch.float32) for i in range(n)],
+                [torch.tensor(x_post[i], dtype=torch.float32) for i in range(n)],
+            ))
+            self.in_dim = x_pre.shape[1]
+            self.out_dim = x_post.shape[1]
+            return
+
         rows_pre = db.fetch_activations(layer=pre_tag, limit=limit)
         rows_post = db.fetch_activations(layer=post_tag, limit=limit)
         if not rows_pre or not rows_post:

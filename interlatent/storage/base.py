@@ -119,3 +119,20 @@ class StorageBackend(abc.ABC):
     def iter_activations(self, layer: str, batch_size: int = 1000):
         """Yield batches of ActivationEvents for the given layer."""
         raise NotImplementedError
+
+    # Optional: row-wise access for scalable backends.
+    def get_block(self, *, run_id: str, layer: str, start: int, end: int):
+        """Return (activations, index) for a contiguous step slice."""
+        raise NotImplementedError
+
+    def iter_events(
+        self,
+        *,
+        run_id: str,
+        layer: str,
+        start: int = 0,
+        end: int | None = None,
+        channels: Sequence[int] | None = None,
+    ):
+        """Yield ActivationEvents for a slice, optionally filtered by channels."""
+        raise NotImplementedError

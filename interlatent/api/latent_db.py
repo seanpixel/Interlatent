@@ -47,6 +47,8 @@ _SCHEME_TO_BACKEND = {
     "dynamodb": "..storage.dynamo:DynamoBackend",
     "hdf5": "..storage.hdf5:HDF5Backend",
     "h5": "..storage.hdf5:HDF5Backend",
+    "hdf5row": "..storage.hdf5_row:HDF5RowBackend",
+    "hdf5v2": "..storage.hdf5_row:HDF5RowBackend",
 }
 
 
@@ -217,6 +219,51 @@ class LatentDB:
     def fetch_vectors(self, *, layer: str, limit: int | None = None):
         """Return dense activations and metadata for a layer, when supported by the backend."""
         return self._store.fetch_vectors(layer=layer, limit=limit)
+
+    def get_block(self, *, run_id: str, layer: str, start: int, end: int):
+        """Fast path: return (activations, index) for a contiguous step slice."""
+        if hasattr(self._store, "get_block"):
+            return self._store.get_block(run_id=run_id, layer=layer, start=start, end=end)  # type: ignore[attr-defined]
+        x, meta = self._store.fetch_vectors(layer=layer, limit=None)
+        end = min(end, x.shape[0])
+        if end <= start:
+            return x[:0], {}
+        sliced = x[start:end]
+        out = {}
+        for key, val in meta.items():
+            if isinstance(val, list):
+                out[key] = val[start:end]
+            elif hasattr(val, "__getitem__"):
+                out[key] = val[start:end]
+            else:
+                out[key] = val
+        out["run_id"] = run_id
+        return sliced, out
+
+    def iter_events(
+        self,
+        *,
+        run_id: str,
+        layer: str,
+        start: int = 0,
+        end: int | None = None,
+        channels: Sequence[int] | None = None,
+    ):
+        """Slow path: materialize ActivationEvent rows for a slice."""
+        if hasattr(self._store, "iter_events"):
+            yield from self._store.iter_events(  # type: ignore[attr-defined]
+                run_id=run_id, layer=layer, start=start, end=end, channels=channels
+            )
+            return
+        events = self._store.fetch_activations(layer=layer, limit=None)
+        for ev in events:
+            if ev.run_id != run_id:
+                continue
+            if ev.step < start or (end is not None and ev.step >= end):
+                continue
+            if channels is not None and ev.channel not in channels:
+                continue
+            yield ev
 
 
     def timeline(

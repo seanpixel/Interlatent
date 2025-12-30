@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Dict, List, Tuple
 
 import torch
@@ -22,6 +23,46 @@ class LinearProbeDataset(Dataset):
         *,
         limit: int | None = None,
     ):
+        x, meta = db.fetch_vectors(layer=layer, limit=limit)
+        if x.size and meta:
+            contexts = meta.get("context")
+            context_ids = meta.get("context_id")
+            context_table = meta.get("contexts")
+
+            samples: list[tuple[torch.Tensor, torch.Tensor]] = []
+            for i in range(x.shape[0]):
+                ctx = {}
+                if contexts is not None:
+                    raw = contexts[i]
+                    if isinstance(raw, str) and raw:
+                        ctx = json.loads(raw)
+                    elif isinstance(raw, dict):
+                        ctx = raw
+                elif context_ids is not None and context_table is not None:
+                    cid = int(context_ids[i])
+                    if cid >= 0:
+                        ctx = json.loads(context_table[cid])
+
+                metrics = (ctx or {}).get("metrics", {})
+                tgt = metrics.get(target_key)
+                if tgt is None:
+                    tgt = (ctx or {}).get(target_key)
+                if tgt is None:
+                    continue
+                samples.append(
+                    (torch.tensor(x[i], dtype=torch.float32), torch.tensor(float(tgt), dtype=torch.float32))
+                )
+
+            if not samples:
+                raise ValueError(
+                    f"No targets found for '{target_key}' in context metrics; cannot build probe dataset."
+                )
+
+            self.samples = samples
+            self.in_dim = x.shape[1]
+            self.channel_order = list(range(x.shape[1]))
+            return
+
         events = db.fetch_activations(layer=layer, limit=limit)
         if not events:
             raise ValueError(f"No activations found for layer '{layer}'")
