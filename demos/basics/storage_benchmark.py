@@ -120,6 +120,8 @@ def parse_args():
         default="expanded",
         help="expanded=ActivationEvent expansion; rows=raw row reads only; vector=fetch_vectors; block=get_block.",
     )
+    ap.add_argument("--profile-io", action="store_true", help="Enable backend timing logs (HDF5 row backend only).")
+    ap.add_argument("--profile-every", type=int, default=50, help="Emit timing logs every N write/flush calls.")
     ap.add_argument("--keep", action="store_true", help="Keep benchmark DB files.")
     return ap.parse_args()
 
@@ -127,6 +129,9 @@ def parse_args():
 def main():
     args = parse_args()
     os.environ["LATENTDB_MAX_CHANNELS"] = str(args.channels)
+    if args.profile_io:
+        os.environ["LATENTDB_PROFILE_IO"] = "1"
+        os.environ["LATENTDB_PROFILE_EVERY"] = str(args.profile_every)
     events = build_events(args.events, args.channels, args.layer, run_id="bench")
 
     batch_size = args.batch_size

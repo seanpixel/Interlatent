@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import time
 from typing import Iterable, List, Sequence
 
 import h5py
@@ -51,6 +52,16 @@ class HDF5RowBackend(StorageBackend):
         self._string_tables: dict[str, list[str]] = {}
         self._string_maps: dict[str, dict[str, int]] = {}
         self._context_cache: dict[int, dict] = {}
+        self._profile_io = os.environ.get("LATENTDB_PROFILE_IO", "0") == "1"
+        self._profile_every = int(os.environ.get("LATENTDB_PROFILE_EVERY", "50"))
+        self._profile_counts = {"write_events": 0, "flush_pending": 0}
+        self._profile_accum = {
+            "write_events_s": 0.0,
+            "grouping_s": 0.0,
+            "step_index_s": 0.0,
+            "act_write_s": 0.0,
+            "flush_pending_s": 0.0,
+        }
         self._ensure_schema()
         self._load_string_tables()
 
@@ -216,6 +227,7 @@ class HDF5RowBackend(StorageBackend):
             i = j
 
     def _flush_pending(self, force: bool = False):
+        t0 = time.perf_counter() if self._profile_io else None
         if not self._pending:
             return
         ready = []
@@ -244,9 +256,20 @@ class HDF5RowBackend(StorageBackend):
             )
         for run_id, rows in step_rows.items():
             run_grp = self._get_run_group(run_id)
+            t_step = time.perf_counter() if self._profile_io else None
             self._write_step_index_rows(run_grp, rows)
+            if self._profile_io:
+                self._profile_accum["step_index_s"] += time.perf_counter() - t_step
         for (run_id, layer_id), rows in per_run_layer.items():
+            t_act = time.perf_counter() if self._profile_io else None
             self._write_activation_rows(run_id, layer_id, rows)
+            if self._profile_io:
+                self._profile_accum["act_write_s"] += time.perf_counter() - t_act
+        if self._profile_io:
+            self._profile_accum["flush_pending_s"] += time.perf_counter() - t0
+            self._profile_counts["flush_pending"] += 1
+            if force or self._profile_counts["flush_pending"] % self._profile_every == 0:
+                self._profile_report("flush_pending")
 
     # ------------------------------------------------------------------
     # Write methods ------------------------------------------------------
@@ -256,6 +279,8 @@ class HDF5RowBackend(StorageBackend):
         self.write_events([ev])
 
     def write_events(self, events: Sequence[ActivationEvent]) -> None:
+        t0 = time.perf_counter() if self._profile_io else None
+        t_group = time.perf_counter() if self._profile_io else None
         hidden_dim = self._hidden_dim
         grouped: dict[tuple[str, str, int], dict] = {}
 
@@ -300,6 +325,8 @@ class HDF5RowBackend(StorageBackend):
             if rec["context"] is None:
                 rec["context"] = ev.context
 
+        if self._profile_io:
+            self._profile_accum["grouping_s"] += time.perf_counter() - t_group
         step_rows: dict[str, list[dict]] = {}
         per_run_layer: dict[tuple[str, int], list[dict]] = {}
 
@@ -367,6 +394,22 @@ class HDF5RowBackend(StorageBackend):
             self._write_activation_rows(run_id, layer_id, rows)
 
         self._flush_pending(force=False)
+        if self._profile_io:
+            self._profile_accum["write_events_s"] += time.perf_counter() - t0
+            self._profile_counts["write_events"] += 1
+            if self._profile_counts["write_events"] % self._profile_every == 0:
+                self._profile_report("write_events")
+
+    def _profile_report(self, label: str) -> None:
+        msg = (
+            f"[hdf5row.profile] {label} "
+            f"write_events={self._profile_accum['write_events_s']:.3f}s "
+            f"grouping={self._profile_accum['grouping_s']:.3f}s "
+            f"flush_pending={self._profile_accum['flush_pending_s']:.3f}s "
+            f"step_index={self._profile_accum['step_index_s']:.3f}s "
+            f"act_write={self._profile_accum['act_write_s']:.3f}s"
+        )
+        print(msg)
 
     def write_statblock(self, sb: StatBlock) -> None:
         stats = self._file["stats"]
