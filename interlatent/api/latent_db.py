@@ -223,7 +223,10 @@ class LatentDB:
     def get_block(self, *, run_id: str, layer: str, start: int, end: int):
         """Fast path: return (activations, index) for a contiguous step slice."""
         if hasattr(self._store, "get_block"):
-            return self._store.get_block(run_id=run_id, layer=layer, start=start, end=end)  # type: ignore[attr-defined]
+            try:
+                return self._store.get_block(run_id=run_id, layer=layer, start=start, end=end)  # type: ignore[attr-defined]
+            except NotImplementedError:
+                pass
         x, meta = self._store.fetch_vectors(layer=layer, limit=None)
         end = min(end, x.shape[0])
         if end <= start:
