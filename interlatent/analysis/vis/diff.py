@@ -10,6 +10,8 @@ from __future__ import annotations
 import argparse
 from typing import Dict, Iterable, Sequence, Tuple
 
+import numpy as np
+
 from interlatent.api import LatentDB
 
 
@@ -47,6 +49,35 @@ def _iter_layers(db: LatentDB, *, layer: str | None, layer_prefix: str | None) -
     raise SystemExit("Must provide --layer or --layer-prefix.")
 
 
+def _mask_from_meta(meta: dict, prompt_like: str | None, token_like: str | None, n_rows: int):
+    mask = np.ones(n_rows, dtype=bool)
+    if prompt_like:
+        if "prompt_id" in meta and "prompts" in meta:
+            prompts = meta["prompts"]
+            ids = [i for i, p in enumerate(prompts) if prompt_like in p]
+            if ids:
+                ids = np.asarray(ids)
+                mask &= np.isin(meta["prompt_id"], ids)
+            else:
+                mask &= False
+        else:
+            prompts = meta.get("prompt") or []
+            mask &= np.array([(p is not None and prompt_like in p) for p in prompts], dtype=bool)
+    if token_like:
+        if "token_id" in meta and "tokens" in meta:
+            tokens = meta["tokens"]
+            ids = [i for i, t in enumerate(tokens) if token_like in t]
+            if ids:
+                ids = np.asarray(ids)
+                mask &= np.isin(meta["token_id"], ids)
+            else:
+                mask &= False
+        else:
+            tokens = meta.get("token") or []
+            mask &= np.array([(t is not None and token_like in t) for t in tokens], dtype=bool)
+    return mask
+
+
 def _aggregated_means(
     db: LatentDB,
     *,
@@ -63,22 +94,33 @@ def _aggregated_means(
     sums: Dict[Tuple[str, int], float] = {}
     counts: Dict[Tuple[str, int], int] = {}
     for layer_name in _iter_layers(db, layer=layer, layer_prefix=layer_prefix):
-        events = db.fetch_activations(layer=layer_name, limit=None)
-        for ev in events:
-            if channels and ev.channel not in channels:
-                continue
-            if prompt_like and (ev.prompt is None or prompt_like not in ev.prompt):
-                continue
-            if token_like and (ev.token is None or token_like not in ev.token):
-                continue
-            val = ev.value_sum if ev.value_sum is not None else (ev.tensor[0] if ev.tensor else 0.0)
-            key = (layer_name, int(ev.channel))
-            sums[key] = sums.get(key, 0.0) + float(val)
-            counts[key] = counts.get(key, 0) + 1
+        x, meta = db.fetch_vectors(layer=layer_name, limit=None)
+        if x.size == 0:
+            continue
+        mask = _mask_from_meta(meta, prompt_like, token_like, x.shape[0])
+        if not mask.any():
+            continue
+        x_sel = x[mask]
+        if channels:
+            ch_idx = np.array(list(channels), dtype=int)
+            x_sel = x_sel[:, ch_idx]
+            means = x_sel.mean(axis=0)
+            counts_vec = np.full(len(ch_idx), x_sel.shape[0], dtype=int)
+            for i, ch in enumerate(ch_idx):
+                key = (layer_name, int(ch))
+                sums[key] = float(means[i])
+                counts[key] = int(counts_vec[i])
+        else:
+            means = x_sel.mean(axis=0)
+            count = x_sel.shape[0]
+            for ch in range(means.shape[0]):
+                key = (layer_name, int(ch))
+                sums[key] = float(means[ch])
+                counts[key] = int(count)
 
     for key, total in sums.items():
         cnt = counts[key]
-        agg[key] = (total / cnt if cnt else 0.0, cnt)
+        agg[key] = (total, cnt)
     return agg
 
 

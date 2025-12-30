@@ -45,6 +45,7 @@ class HDF5Backend(StorageBackend):
         self._pending: dict[tuple[str, int, str], dict] = {}
         self._string_tables = {}
         self._string_maps = {}
+        self._context_cache: dict[int, dict] = {}
         self._ensure_schema()
         self._load_string_tables()
 
@@ -361,7 +362,14 @@ class HDF5Backend(StorageBackend):
 
         events: list[ActivationEvent] = []
         for i in range(n):
-            ctx = json.loads(contexts[context_id[i]]) if context_id[i] >= 0 else {}
+            cid = int(context_id[i])
+            if cid >= 0:
+                ctx = self._context_cache.get(cid)
+                if ctx is None:
+                    ctx = json.loads(contexts[cid])
+                    self._context_cache[cid] = ctx
+            else:
+                ctx = {}
             prompt = prompts[prompt_id[i]] if prompt_id[i] >= 0 else None
             token = tokens[token_id[i]] if token_id[i] >= 0 else None
             run_id = run_ids[run_id_id[i]] if run_id_id[i] >= 0 else ""
@@ -384,6 +392,31 @@ class HDF5Backend(StorageBackend):
                 )
         return events
 
+    def fetch_vectors(self, *, layer: str, limit: int | None = None):
+        grp = self._layer_group(layer)
+        if grp is None:
+            return np.zeros((0, 0), dtype=np.float32), {}
+        size = int(grp.attrs.get("size", 0))
+        n = min(size, limit) if limit else size
+        if n <= 0:
+            return np.zeros((0, grp["x"].shape[1]), dtype=np.float32), {}
+
+        x = grp["x"][:n]
+        meta = {
+            "step": grp["step"][:n],
+            "prompt_index": grp["prompt_index"][:n],
+            "token_index": grp["token_index"][:n],
+            "prompt_id": grp["prompt_id"][:n],
+            "token_id": grp["token_id"][:n],
+            "context_id": grp["context_id"][:n],
+            "run_id_id": grp["run_id_id"][:n],
+            "prompts": self._string_tables["prompts"],
+            "tokens": self._string_tables["tokens"],
+            "contexts": self._string_tables["contexts"],
+            "run_ids": self._string_tables["run_ids"],
+        }
+        return x, meta
+
     def iter_activations(self, layer: str, batch_size: int = 1000):
         grp = self._layer_group(layer)
         if grp is None:
@@ -405,7 +438,14 @@ class HDF5Backend(StorageBackend):
             run_id_id = grp["run_id_id"][start:end]
             events: list[ActivationEvent] = []
             for i in range(end - start):
-                ctx = json.loads(contexts[context_id[i]]) if context_id[i] >= 0 else {}
+                cid = int(context_id[i])
+                if cid >= 0:
+                    ctx = self._context_cache.get(cid)
+                    if ctx is None:
+                        ctx = json.loads(contexts[cid])
+                        self._context_cache[cid] = ctx
+                else:
+                    ctx = {}
                 prompt = prompts[prompt_id[i]] if prompt_id[i] >= 0 else None
                 token = tokens[token_id[i]] if token_id[i] >= 0 else None
                 run_id = run_ids[run_id_id[i]] if run_id_id[i] >= 0 else ""

@@ -81,6 +81,10 @@ class StorageBackend(abc.ABC):
         """Return ActivationEvent rows for the given layer."""
 
     @abc.abstractmethod
+    def fetch_vectors(self, *, layer: str, limit: int | None = None):
+        """Return (x, meta) where x is a dense array of activations for the layer."""
+
+    @abc.abstractmethod
     def unexplained(self, overwrite: bool) -> Iterable[StatBlock]:  # pragma: no cover
         """Yield StatBlocks needing a (new) explanation."""
     

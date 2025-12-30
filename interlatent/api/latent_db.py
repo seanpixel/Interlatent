@@ -214,6 +214,10 @@ class LatentDB:
             t1 = time.perf_counter()
             _LOG.info("[latents] iter_activations layer=%s total=%d time=%.2fms", layer, total, (t1 - t0) * 1e3)
 
+    def fetch_vectors(self, *, layer: str, limit: int | None = None):
+        """Return dense activations and metadata for a layer, when supported by the backend."""
+        return self._store.fetch_vectors(layer=layer, limit=limit)
+
 
     def timeline(
         self,

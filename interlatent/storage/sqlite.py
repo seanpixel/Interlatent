@@ -471,6 +471,58 @@ class SQLiteBackend(StorageBackend):
                 )
         return events
 
+    def fetch_vectors(self, *, layer: str, limit: int | None = None):
+        cur = self._conn.cursor()
+        sql = (
+            "SELECT run_id, step, layer, prompt, prompt_index, token_index, token, tensor, context "
+            "FROM activations WHERE layer = ? "
+            "ORDER BY step"
+        )
+        params = [layer]
+        if limit:
+            sql += " LIMIT ?"
+            params.append(limit)
+        rows = cur.execute(sql, params).fetchall()
+        if not rows:
+            return np.zeros((0, 0), dtype=np.float32), {}
+
+        tensors = []
+        steps = []
+        prompt_index = []
+        token_index = []
+        prompts = []
+        tokens = []
+        contexts = []
+        run_ids = []
+        max_len = 0
+        for r in rows:
+            vals = json.loads(r["tensor"] or "[]")
+            max_len = max(max_len, len(vals))
+            tensors.append(vals)
+            steps.append(int(r["step"]))
+            prompt_index.append(r.get("prompt_index"))
+            token_index.append(r.get("token_index"))
+            prompts.append(r.get("prompt"))
+            tokens.append(r.get("token"))
+            contexts.append(r.get("context"))
+            run_ids.append(r.get("run_id"))
+
+        x = np.zeros((len(tensors), max_len), dtype=np.float32)
+        for i, vals in enumerate(tensors):
+            if vals:
+                x[i, : len(vals)] = np.asarray(vals, dtype=np.float32)
+
+        meta = {
+            "step": np.asarray(steps),
+            "prompt_index": np.asarray(prompt_index),
+            "token_index": np.asarray(token_index),
+            "prompt": prompts,
+            "token": tokens,
+            "context": contexts,
+            "run_id": run_ids,
+        }
+        return x, meta
+
     def fetch_events(
         self,
         layer: str,

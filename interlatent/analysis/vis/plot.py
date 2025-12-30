@@ -18,6 +18,7 @@ from typing import Iterable, List, Optional
 import matplotlib.pyplot as plt
 
 from interlatent.api import LatentDB
+import numpy as np
 
 @dataclass
 class ActivationRow:
@@ -54,23 +55,52 @@ def fetch_activations(
     (prompt_index, token_index).
     """
     dbi = LatentDB(db)
-    events = dbi.fetch_activations(layer=layer)
+    x, meta = dbi.fetch_vectors(layer=layer)
+    if x.size == 0:
+        return []
+
+    n = x.shape[0]
+    mask = np.ones(n, dtype=bool)
+    if prompt_index is not None:
+        mask &= meta.get("prompt_index") == prompt_index
+    if prompt_like:
+        if "prompt_id" in meta and "prompts" in meta:
+            prompts = meta["prompts"]
+            ids = [i for i, p in enumerate(prompts) if prompt_like in p]
+            if ids:
+                mask &= np.isin(meta["prompt_id"], np.asarray(ids))
+            else:
+                mask &= False
+        else:
+            prompts = meta.get("prompt") or []
+            mask &= np.array([(p is not None and prompt_like in p) for p in prompts], dtype=bool)
+
+    if not mask.any():
+        return []
+    idx = np.where(mask)[0]
+    vals = x[idx, channel]
+
+    if "prompt_id" in meta and "prompts" in meta:
+        prompt_vals = [meta["prompts"][int(meta["prompt_id"][i])] for i in idx]
+    else:
+        prompt_vals = [meta.get("prompt")[i] for i in idx]
+    if "token_id" in meta and "tokens" in meta:
+        token_vals = [meta["tokens"][int(meta["token_id"][i])] for i in idx]
+    else:
+        token_vals = [meta.get("token")[i] for i in idx]
+    prompt_index_vals = meta.get("prompt_index")[idx] if "prompt_index" in meta else [None] * len(idx)
+    token_index_vals = meta.get("token_index")[idx] if "token_index" in meta else [None] * len(idx)
+
     rows = []
-    for ev in events:
-        if ev.channel != channel:
-            continue
-        if prompt_index is not None and ev.prompt_index != prompt_index:
-            continue
-        if prompt_like and (ev.prompt is None or prompt_like not in ev.prompt):
-            continue
+    for i in range(len(idx)):
         rows.append(
             ActivationRow(
-                token_index=ev.token_index if ev.token_index is not None else 0,
-                token=ev.token,
-                value=float(ev.value_sum if ev.value_sum is not None else (ev.tensor[0] if ev.tensor else 0.0)),
-                prompt_index=ev.prompt_index,
-                prompt=ev.prompt,
-                run_id=ev.run_id,
+                token_index=int(token_index_vals[i]) if token_index_vals[i] is not None else 0,
+                token=token_vals[i],
+                value=float(vals[i]),
+                prompt_index=int(prompt_index_vals[i]) if prompt_index_vals[i] is not None else None,
+                prompt=prompt_vals[i],
+                run_id=None,
             )
         )
 
