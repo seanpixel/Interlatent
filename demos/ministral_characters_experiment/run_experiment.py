@@ -56,18 +56,27 @@ def load_model_and_tokenizer(model_id: str, trust_remote_code: bool):
         torch_dtype=dtype,
         device_map={"": device},
     )
-    return tok, llm, device
+    return tok, llm, device, config
 
 
-def collect(db: LatentDB, tok, llm, dataset: PromptDataset, layer: str, device: str, max_channels: int | None):
+def collect(
+    db: LatentDB,
+    tok,
+    llm,
+    dataset: PromptDataset,
+    layers: list[int],
+    device: str,
+    max_channels: int | None,
+    log_every_prompts: int,
+):
     collector = LLMCollector(
         db,
-        layer_indices=[int(layer.split(".")[-1]) if layer.startswith("llm.layer.") else layer],
+        layer_indices=layers,
         max_channels=max_channels,
         device=device,
         prompt_context_fn=dataset.prompt_context_fn(),
         token_metrics_fn=dataset.token_metrics_fn(metric_name="prompt_label"),
-        log_every_prompts=5,
+        log_every_prompts=log_every_prompts,
     )
     print("[collect] Starting collection...")
     collector.run(
@@ -101,19 +110,44 @@ def run(args):
 
     trust_remote_code = os.environ.get("HF_TRUST_REMOTE_CODE", "1") == "1"
     print("[load] Loading model and tokenizer...")
-    tok, llm, device = load_model_and_tokenizer(args.model, trust_remote_code)
+    tok, llm, device, config = load_model_and_tokenizer(args.model, trust_remote_code)
     print(f"[load] Model on {device}")
 
+    if args.all_channels:
+        hidden_size = int(getattr(config, "hidden_size", 0) or 0)
+        if hidden_size <= 0:
+            raise ValueError("Model config missing hidden_size; set --max_channels manually.")
+        args.max_channels = hidden_size
     os.environ["LATENTDB_MAX_CHANNELS"] = str(args.max_channels)
+
+    if args.layers:
+        layer_indices = [int(x) for x in args.layers.split(",")]
+    else:
+        num_layers = int(getattr(config, "num_hidden_layers", 0) or 0)
+        if num_layers <= 0:
+            raise ValueError("Model config missing num_hidden_layers; set --layers manually.")
+        picks = [0, num_layers // 3, (2 * num_layers) // 3, num_layers - 1]
+        layer_indices = []
+        for idx in picks:
+            if idx not in layer_indices:
+                layer_indices.append(idx)
+        if len(layer_indices) < 4:
+            for idx in range(num_layers):
+                if idx not in layer_indices:
+                    layer_indices.append(idx)
+                if len(layer_indices) >= 4:
+                    break
+    print(f"[setup] capturing layers={layer_indices} max_channels={args.max_channels}")
     db_uri, db_path = resolve_db_uri(args.db)
     if db_path is not None and db_path.exists():
         db_path.unlink()
     db = LatentDB(db_uri)
 
-    collect(db, tok, llm, dataset, args.layer, device, args.max_channels)
-    base_x, _ = db.fetch_vectors(layer=args.layer)
+    collect(db, tok, llm, dataset, layer_indices, device, args.max_channels, args.log_every_prompts)
+    primary_layer = f"llm.layer.{layer_indices[0]}"
+    base_x, _ = db.fetch_vectors(layer=primary_layer)
     base_rows = int(base_x.shape[0]) if base_x.size else 0
-    print(f"[collector] captured {base_rows} activations for layer {args.layer}")
+    print(f"[collector] captured {base_rows} activations for layer {primary_layer}")
 
     lp_ds = LinearProbeDataset(db, layer=args.layer, target_key="prompt_label")
     print("[probe] Training linear probe...")
@@ -123,16 +157,16 @@ def run(args):
     print(f"[linear probe] samples={len(lp_ds)}, weight_shape={tuple(probe.proj.weight.shape)}")
 
     print("[transcoder] Training...")
-    pipe = TranscoderPipeline(db, args.layer, k=args.transcoder_k, epochs=args.transcoder_epochs)
+    pipe = TranscoderPipeline(db, primary_layer, k=args.transcoder_k, epochs=args.transcoder_epochs)
     trainer = pipe.run()
-    latent_x, _ = db.fetch_vectors(layer=f"latent:{args.layer}")
+    latent_x, _ = db.fetch_vectors(layer=f"latent:{primary_layer}")
     latent_rows = int(latent_x.shape[0]) if latent_x.size else 0
     print(f"[transcoder] latent rows={latent_rows}, encoder_shape={tuple(trainer.T.weight.shape)}")
 
     print("[sae] Training...")
-    sae_pipe = SAEPipeline(db, args.layer, k=args.sae_k, epochs=args.sae_epochs)
+    sae_pipe = SAEPipeline(db, primary_layer, k=args.sae_k, epochs=args.sae_epochs)
     sae_model = sae_pipe.run()
-    sae_latents_x, _ = db.fetch_vectors(layer=f"latent_sae:{args.layer}")
+    sae_latents_x, _ = db.fetch_vectors(layer=f"latent_sae:{primary_layer}")
     sae_latent_rows = int(sae_latents_x.shape[0]) if sae_latents_x.size else 0
     print(f"[sae] latent rows={sae_latent_rows}, encoder_shape={tuple(sae_model.encoder.weight.shape)}")
 
@@ -144,7 +178,7 @@ def parse_args():
     ap = argparse.ArgumentParser()
     ap.add_argument("--csv", type=Path, required=True, help="CSV with text/label columns (character rewrites).")
     ap.add_argument("--model", type=str, default="mistralai/Ministral-3-14B-Instruct-2512")
-    ap.add_argument("--layer", type=str, default="llm.layer.8")
+    ap.add_argument("--layers", type=str, default="", help="Comma-separated layer indices (e.g., '0,8,16,24').")
     ap.add_argument("--db", type=str, default="latents_character_dilemmas.db")
     ap.add_argument(
         "--max_channels",
@@ -152,6 +186,8 @@ def parse_args():
         default=int(os.environ.get("MAX_CHANNELS", "128")),
         help="Limit the number of channels to record per layer (default from MAX_CHANNELS or 128).",
     )
+    ap.add_argument("--all-channels", action="store_true", help="Capture all channels from the model.")
+    ap.add_argument("--log-every-prompts", type=int, default=1, help="Log progress every N prompts.")
     ap.add_argument("--probe_epochs", type=int, default=1)
     ap.add_argument("--transcoder_k", type=int, default=8)
     ap.add_argument("--transcoder_epochs", type=int, default=1)
