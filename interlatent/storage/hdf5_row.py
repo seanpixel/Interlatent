@@ -88,7 +88,10 @@ class HDF5RowBackend(StorageBackend):
     def _load_string_tables(self):
         dicts = self._file["dict"]
         for name, ds in dicts.items():
-            size = int(ds.attrs.get("size", ds.shape[0]))
+            size_attr = int(ds.attrs.get("size", ds.shape[0]))
+            size = min(size_attr, ds.shape[0])
+            if size < size_attr:
+                ds.attrs["size"] = size
             vals = [str(v) for v in ds[:size]]
             self._string_tables[name] = vals
             self._string_maps[name] = {v: i for i, v in enumerate(vals)}
