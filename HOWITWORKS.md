@@ -1,6 +1,6 @@
 # How Interlatent Works
 
-This document is an internal, technical overview of the system architecture and data flow. It starts with a birds‑eye view and then zooms into storage, collection, datasets, training, and analysis/visualization.
+This document is an internal, technical overview of the system architecture and data flow. It starts with a birds‑eye view and then zooms into storage, collection, datasets, training, and analysis/visualization. Code snippets are taken directly from the repository and labeled with their source paths.
 
 ---
 
@@ -15,9 +15,54 @@ Interlatent is built around a simple loop:
 
 The storage backend is the spine: all downstream tasks operate on it, either by reading per‑step vectors (`fetch_vectors` / `get_block`) or by materializing per‑channel events when needed.
 
+Entry point (backend resolution) in `interlatent/api/latent_db.py`:
+```python
+_SCHEME_TO_BACKEND = {
+    "sqlite": "..storage.sqlite:SQLiteBackend",
+    "file": "..storage.sqlite:SQLiteBackend",
+    "hdf5": "..storage.hdf5:HDF5Backend",
+    "h5": "..storage.hdf5:HDF5Backend",
+    "hdf5row": "..storage.hdf5_row:HDF5RowBackend",
+    "hdf5v2": "..storage.hdf5_row:HDF5RowBackend",
+}
+```
+
+The `LatentDB` write path batches `ActivationEvent` objects and flushes them to the backend:
+```python
+if self._write_batch_size > 0:
+    self._write_buffer.append(event)
+    if len(self._write_buffer) >= self._write_batch_size:
+        self._flush_buffer()
+else:
+    self._store.write_event(event)
+```
+`interlatent/api/latent_db.py`
+
 ---
 
-## 2) Storage: Backends and Data Layout
+## 2) Data Model and Storage
+
+### 2.0 ActivationEvent contract
+The system’s wire format is `ActivationEvent`, defined in `interlatent/schema.py`:
+```python
+class ActivationEvent(BaseModel):
+    run_id: str
+    step: int
+    layer: str
+    channel: int
+    prompt: str | None
+    prompt_index: int | None
+    token_index: int | None
+    token: str | None
+    value_sum: float | None
+    value_sq_sum: float | None
+    tensor: List[float]
+    timestamp: str
+    context: Dict[str, Any]
+```
+Storage backends map their physical layout into this logical shape. The row backend keeps `step` as the row index so it can reconstruct events on demand.
+
+### 2.1 SQLite Backend (small/medium runs)
 
 ### 2.1 SQLite Backend (small/medium runs)
 **Goal:** simple single‑file DB for quick experiments.
@@ -26,6 +71,40 @@ Layout:
 - `activations` table: one row per `(run_id, step, layer)` with a dense JSON vector.
 - `stats`, `metric_sums`: aggregated stats and correlations.
 - `explanations`, `artifacts`: auxiliary tables.
+
+Schema (from `interlatent/storage/sqlite.py`):
+```sql
+CREATE TABLE IF NOT EXISTS activations (
+  run_id     TEXT,
+  step       INTEGER,
+  layer      TEXT,
+  prompt     TEXT,
+  prompt_index INTEGER,
+  token_index  INTEGER,
+  token      TEXT,
+  tensor     TEXT,
+  context    TEXT,
+  PRIMARY KEY (run_id, step, layer)
+) WITHOUT ROWID;
+```
+
+Writing is batched per `(run_id, step, layer)` with a single JSON vector:
+```python
+activation_rows.append(
+    (run_id, step, layer, prompt, prompt_index, token_index, token,
+     json.dumps(tensor), json.dumps(context))
+)
+cur.executemany("INSERT OR REPLACE INTO activations ...", activation_rows)
+```
+`interlatent/storage/sqlite.py`
+
+Reads expand JSON rows into per‑channel events:
+```python
+tensor = json.loads(r["tensor"] or "[]")
+for ch, val in enumerate(tensor):
+    events.append(ActivationEvent(run_id=r["run_id"], step=r["step"], layer=r["layer"], channel=ch, ...))
+```
+`interlatent/storage/sqlite.py`
 
 **Access pattern:** good for small runs but per‑row JSON parsing and per‑channel expansion is expensive at scale.
 
@@ -44,12 +123,61 @@ Logical layout:
 **Join key:** `(run_id, layer_id, step)` where `step` is the row number.  
 This is enough to reconstruct a full `ActivationEvent` when required.
 
+Core schema creation (from `interlatent/storage/hdf5_row.py`):
+```python
+grp.create_dataset(
+    "step_index",
+    shape=(0,),
+    maxshape=(None,),
+    dtype=step_dtype,
+    chunks=(self._chunk_rows,),
+)
+grp.create_dataset(
+    "act",
+    shape=(0, self._hidden_dim),
+    maxshape=(None, self._hidden_dim),
+    dtype=self._act_dtype,
+    chunks=(self._chunk_rows, self._hidden_dim),
+)
+```
+
+Row writes are buffered and flushed in contiguous slices:
+```python
+block = np.stack([r["vec"] for r in rows_sorted[i:j]], axis=0)
+act[start_step : start_step + block.shape[0], :] = block
+```
+`interlatent/storage/hdf5_row.py`
+
 Fast APIs:
 - `get_block(run_id, layer, start, end)` returns `(x, idx)` without event materialization.
 - `fetch_vectors(layer)` returns all vectors + metadata for a layer.
 
+Facade call in `interlatent/api/latent_db.py`:
+```python
+def get_block(self, *, run_id: str, layer: str, start: int, end: int):
+    if hasattr(self._store, "get_block"):
+        return self._store.get_block(run_id=run_id, layer=layer, start=start, end=end)
+    x, meta = self._store.fetch_vectors(layer=layer, limit=None)
+    return x[start:end], {k: v[start:end] for k, v in meta.items()}
+```
+
+Fast block read (from `interlatent/storage/hdf5_row.py`):
+```python
+x = act[start:end]
+idx = step_index[start:end]
+meta = {"prompt_index": idx["prompt_index"], "token_index": idx["token_index"], ...}
+return x, meta
+```
+
 Slow APIs:
 - `iter_events(...)` reconstructs `ActivationEvent` objects only for slices or selected channels.
+
+Event materialization (from `interlatent/storage/hdf5_row.py`):
+```python
+for ch in ch_list:
+    val = float(x[row_i, ch])
+    yield ActivationEvent(run_id=run_id, step=step, layer=layer, channel=ch, ...)
+```
 
 ---
 
@@ -64,6 +192,21 @@ Process:
 - Writes per‑token activations to the DB:
   - `step` increments once per token (shared across layers).
   - Metadata includes `prompt_index`, `token_index`, `token_id`, and context.
+
+Core loop (from `interlatent/collectors/llm_collector.py`):
+```python
+layer_indices = self._resolve_layers(len(hidden_states))
+for b_idx, prompt_text in enumerate(batch):
+    ...
+    for token_idx in range(max_len):
+        for layer_idx in layer_indices:
+            layer_tensor = hidden_states[layer_idx]
+            for ch in range(H):
+                self.db.write_event(
+                    ActivationEvent(run_id=run_id, step=event_step, layer=layer_name, ...)
+                )
+        event_step += 1
+```
 
 Key parameters:
 - `layer_indices`: list of hidden state layers to capture.
@@ -81,14 +224,36 @@ Captures activations at each environment step. Can log `{layer}:pre` and `{layer
 - `fetch_vectors` returns dense `(N × D)` activations + metadata arrays.
 - Datasets construct tensors directly from these blocks.
 
+Example fast path (from `interlatent/analysis/dataset/activation_vector_dataset.py`):
+```python
+x, meta = db.fetch_vectors(layer=layer, limit=limit)
+if x.size:
+    vec = torch.tensor(x[i], dtype=torch.float32)
+```
+
 **Slow path (legacy/small runs):**
 - `fetch_activations` returns per‑channel `ActivationEvent`s.
 - Datasets group events by step/prompt/token and reconstruct vectors.
+
+Legacy grouping (from `interlatent/analysis/dataset/activation_vector_dataset.py`):
+```python
+grouped.setdefault(key, {})[ev.channel] = ev.value_sum or sum(ev.tensor)
+vec = torch.tensor([vec_dict.get(ch, 0.0) for ch in channel_order], dtype=torch.float32)
+```
 
 Core datasets:
 - `ActivationVectorDataset`: per‑step activation vectors.
 - `ActivationPairDataset`: pre/post pairs (RL use cases).
 - `LinearProbeDataset`: vectors + targets from `context["metrics"]`.
+
+Target extraction (from `interlatent/analysis/dataset/linear_probe_dataset.py`):
+```python
+metrics = (ctx or {}).get("metrics", {})
+tgt = metrics.get(target_key)
+if tgt is None:
+    tgt = (ctx or {}).get(target_key)
+samples.append((torch.tensor(x[i], dtype=torch.float32), torch.tensor(float(tgt))))
+```
 
 ---
 
@@ -99,6 +264,13 @@ Fits a simple linear model from activations to labels (classification or regress
 
 ### 5.2 TranscoderPipeline
 Sparse bottleneck autoencoder that projects activations into `latent:{layer}`. This backfills new activations into the DB, enabling downstream analysis of learned features.
+
+Backfill loop (from `interlatent/analysis/train/transcoder_pipeline.py`):
+```python
+latent_layer = f"latent:{self.layer}"
+for idx, val in enumerate(z):
+    self.db.write_event(ActivationEvent(run_id=run_id, step=step, layer=latent_layer, ...))
+```
 
 ### 5.3 SAEPipeline
 Standard sparse autoencoder with backfilled `latent_sae:{layer}` activations.
