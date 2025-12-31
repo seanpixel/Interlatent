@@ -92,7 +92,7 @@ def collect(
 
 def resolve_db_uri(db_arg: str) -> tuple[str, Path | None]:
     if "://" in db_arg:
-        if db_arg.startswith(("sqlite:///", "file:///", "hdf5:///", "h5:///")):
+        if db_arg.startswith(("sqlite:///", "file:///", "hdf5:///", "h5:///", "hdf5v2:///", "hdf5row:///")):
             path = Path(db_arg.split(":///", 1)[1])
             return db_arg, path
         return db_arg, None
@@ -160,7 +160,7 @@ def run(args):
     base_rows = int(base_x.shape[0]) if base_x.size else 0
     print(f"[collector] captured {base_rows} activations for layer {primary_layer}")
 
-    lp_ds = LinearProbeDataset(db, layer=args.layer, target_key="prompt_label")
+    lp_ds = LinearProbeDataset(db, layer=primary_layer, target_key="prompt_label")
     print("[probe] Training linear probe...")
     probe = train_linear_probe(
         db, layer=args.layer, target_key="prompt_label", epochs=args.probe_epochs, lr=1e-3, batch_size=16

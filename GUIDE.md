@@ -5,7 +5,8 @@ An end‑to‑end walkthrough for running interpretability experiments on RL pol
 ---
 
 ## 0) What Interlatent Provides
-- **Collection**: Hooks for RL policies (`GymCollector`) and LLMs (`LLMCollector`) that stream activations into a SQLite “LatentDB”.
+- **Collection**: Hooks for RL policies (`GymCollector`) and LLMs (`LLMCollector`) that stream activations into a LatentDB.
+- **Storage**: SQLite for small/medium experiments and an HDF5 row backend for large traces with row-wise activations and normalized metadata.
 - **Datasets**: Helpers to build per-token/per-step activation vectors, pre/post pairs, and probe datasets that preserve prompt/token metadata.
 - **Training**: Pipelines for transcoders (sparse bottleneck AEs), SAEs, and linear probes.
 - **Visualization / Search**: CLI tools to summarize DBs, search for strong activations, and plot per-token traces for any layer (including latent layers).
@@ -29,7 +30,7 @@ pip install stable-baselines3 gymnasium
 ---
 
 ## 2) Core Concepts and Data Flow
-1. **LatentDB**: A SQLite-backed store of `ActivationEvent`s, stats, artifacts, and explanations. Each activation row can include prompt/token metadata.
+1. **LatentDB**: A store of activations, stats, artifacts, and explanations. SQLite is simple and portable; HDF5 row storage is optimized for large sequential traces.
 2. **Collectors**: Run models and write activations:
    - `LLMCollector`: HuggingFace causal LMs, per-token hidden states.
    - `GymCollector`: RL policies over environment steps; can log `{layer}:pre` / `{layer}:post`.
@@ -46,6 +47,26 @@ pip install stable-baselines3 gymnasium
    - `python -m interlatent.analysis.vis.search ...` to filter activations by token/prompt/layer.
    - `python -m interlatent.analysis.vis.plot ...` to plot per-token traces.
 
+### 2.5) Storage Layout and Fast Paths
+For large runs, use the HDF5 row backend (`hdf5v2://`). It stores a per-run step index and per-layer activation matrices so the row number is the join key across layers.
+
+Key paths (conceptually):
+- `/runs/<run_id>/step_index` → compact int fields (prompt_index, token_index, token_id, prompt_id, context_id)
+- `/runs/<run_id>/layers/<layer_id>/act` → 2D numeric matrix (steps × channels)
+- `/dict/prompts`, `/dict/tokens`, `/dict/contexts`, `/dict/layers` → normalized dictionaries
+
+Fast reads avoid per-channel `ActivationEvent` expansion:
+```python
+db = LatentDB("hdf5v2:///latents_llm.h5")
+x, idx = db.get_block(run_id="...", layer="llm.layer.10", start=0, end=2048)
+```
+
+Slow reads materialize events only when needed:
+```python
+for ev in db.iter_events(run_id="...", layer="llm.layer.10", start=0, end=128, channels=[0, 1, 2]):
+    pass
+```
+
 ---
 
 ## 3) LLM Workflow: From Prompts to Latents
@@ -53,6 +74,7 @@ pip install stable-baselines3 gymnasium
 Use `PromptDataset` to attach labels (e.g., benign vs. malignant) to prompts, so labels flow into each token’s context/metrics.
 
 ```python
+import os
 from interlatent.api import LatentDB
 from interlatent.collectors.llm_collector import LLMCollector
 from interlatent.analysis.dataset import PromptDataset, PromptExample
@@ -63,10 +85,14 @@ examples = [
 ]
 ds = PromptDataset(examples)
 
-db = LatentDB("sqlite:///latents_llm.db")
+os.environ["LATENTDB_MAX_CHANNELS"] = "4096"
+os.environ["LATENTDB_ACTIVATION_DTYPE"] = "float16"
+os.environ["LATENTDB_CHUNK_ROWS"] = "8192"
+
+db = LatentDB("hdf5v2:///latents_llm.h5")
 collector = LLMCollector(
     db,
-    layer_indices=[-1],      # last hidden_state
+    layer_indices=[2],      # last hidden_state
     max_channels=128,        # cap hidden dim if needed
     prompt_context_fn=ds.prompt_context_fn(),
     token_metrics_fn=ds.token_metrics_fn(metric_name="label"),  # surfaces label as a metric
@@ -166,21 +192,22 @@ for sb in db.iter_statblocks(layer="latent:mlp_extractor.policy_net.0"):
 ---
 
 ## 7) Practical Tips
-- **Channel caps**: Use `max_channels` in `LLMCollector` to avoid massive DBs on large models.
+- **Channel caps**: Use `max_channels` in `LLMCollector` to avoid massive DBs on large models. For full width, set `LATENTDB_MAX_CHANNELS` and use the row backend.
 - **Prompt lengths**: `LLMCollector` respects attention masks; ensure padding tokens are set on the tokenizer.
-- **Fresh DBs**: Delete old SQLite files between runs to avoid mixing schema/step conventions.
+- **Fresh DBs**: Delete old DB files between runs to avoid mixing schema/step conventions.
 - **Batching**: `batch_size` in `LLMCollector` controls prompt batching; start with 1–2 to keep memory low.
 - **Stats/correlations**: Run `db.compute_stats(min_count=...)` before inspecting correlations.
 - **Latent layers**: Backfilled layers are `latent:{layer}` and `latent_sae:{layer}`; use these in plotting/searching.
+- **Fast reads**: Prefer `fetch_vectors` or `get_block` for analysis; avoid per-channel `ActivationEvent` expansion in large runs.
+- **Row backend tuning**: `LATENTDB_ACTIVATION_DTYPE` (float16/float32) and `LATENTDB_CHUNK_ROWS` (8k–64k) affect throughput.
 
 ---
 
 ## 8) Limitations / Non-goals
-- **Scale**: SQLite is great for small/medium runs; not intended for billion-token traces. For very large runs, you’ll need a different backend.
+- **Scale**: SQLite is great for small/medium runs; for very large traces use the HDF5 row backend and block reads.
 - **Latency**: Collectors are synchronous and unoptimized for throughput; they are research-oriented, not production pipelines.
 - **Model coverage**: Only causal LMs are handled in `LLMCollector`; encoder-only or seq2seq models would need small adaptations.
 - **Metrics richness**: Token-level metrics require user-provided functions; no automatic labeling or safety classifiers are bundled.
-- **No UI dashboard**: Visualization is CLI-based; there is no web UI baked in.
 - **Hook assumptions**: GymCollector assumes discrete actions and uses simple hook points; more complex policies may need custom hooks.
 - **No gradient-based interpretability**: The toolkit focuses on activation logging and sparse bottlenecks, not on gradients/attribution methods.
 
@@ -212,6 +239,11 @@ collector.run(llm, tok, prompts=ds.texts)
 train_linear_probe(db, layer="llm.layer.20", target_key="label", task="classification")
 TranscoderPipeline(db, "llm.layer.20", k=8).run()
 SAEPipeline(db, "llm.layer.20", k=8).run()
+```
+
+**Large-run storage settings:**
+```bash
+LATENTDB_MAX_CHANNELS=4096 LATENTDB_ACTIVATION_DTYPE=float16 LATENTDB_CHUNK_ROWS=8192
 ```
 
 **Search & plot:**
