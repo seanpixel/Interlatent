@@ -3,8 +3,8 @@
 Interlatent is a lightweight interpretability toolkit where you can: save prompts and activations with context, attach labels, learn sparse latents (transcoders/SAEs) and probes, and quickly see which tokens or states drive them. The goal is to allow new independent researchers / engineers to dabble with understanding their models. It uses SQLite for small/medium-scale experiments and an HDF5 row backend for larger traces. We are still in development phase and contributions are welcome.
 
 ## TO DO
-- Online SAE training (in progress)
-- Mini mechinterp demos (character ablations with Ministral-3-14B in progress)
+- Online SAE training
+- Add more mechinterp demos (Contributions welcome!)
 - integration with existing verifier frameworks (e.g. [PI Verifiers](https://github.com/PrimeIntellect-ai/verifiers))
 - Better analysis routines that operate on vector blocks without per-channel expansion
 
